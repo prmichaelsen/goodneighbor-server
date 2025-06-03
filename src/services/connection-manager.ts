@@ -171,8 +171,23 @@ export class ConnectionManager {
   private async handleAuthMessage(connection: ConnectionState, message: AuthMessage): Promise<void> {
     const { id, auth } = message;
     
+    // Log the received API key and the expected API key
+    info('Auth attempt details', {
+      connectionId: connection.id,
+      receivedApiKey: auth.apiKey,
+      expectedApiKey: SECURITY_CONFIG.API_KEY,
+      receivedApiKeyLength: auth.apiKey ? auth.apiKey.length : 0,
+      expectedApiKeyLength: SECURITY_CONFIG.API_KEY ? SECURITY_CONFIG.API_KEY.length : 0,
+      receivedApiKeyType: typeof auth.apiKey,
+      expectedApiKeyType: typeof SECURITY_CONFIG.API_KEY
+    });
+    
+    // Trim both API keys to remove any whitespace or newline characters
+    const receivedApiKey = auth.apiKey ? auth.apiKey.trim() : '';
+    const expectedApiKey = SECURITY_CONFIG.API_KEY ? SECURITY_CONFIG.API_KEY.trim() : '';
+    
     // Check if API key is valid
-    const isValid = auth.apiKey === SECURITY_CONFIG.API_KEY;
+    const isValid = receivedApiKey === expectedApiKey;
     
     if (isValid) {
       connection.isAuthenticated = true;

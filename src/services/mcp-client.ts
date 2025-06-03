@@ -38,7 +38,7 @@ export class MCPClient {
       timeout: MCP_CONFIG.TIMEOUT,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${MCP_CONFIG.API_KEY}`,
+        // Use API key as a query parameter instead of a header
       },
     });
 
@@ -84,6 +84,10 @@ export class MCPClient {
       const response = await this.client.post('/mcp/call', {
         tool: params.tool,
         parameters: params.arguments,
+      }, {
+        params: {
+          apiKey: MCP_CONFIG.API_KEY
+        }
       });
 
       return {
@@ -109,10 +113,28 @@ export class MCPClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await this.client.get('/health');
+      info('Checking MCP server health', { url: `${MCP_CONFIG.SERVER_URL}/health` });
+      const response = await this.client.get('/health', {
+        params: {
+          apiKey: MCP_CONFIG.API_KEY
+        }
+      });
+      info('MCP server health check response', { 
+        status: response.status,
+        data: response.data
+      });
       return response.status === 200;
-    } catch (err) {
-      error('MCP server health check failed', { error: err });
+    } catch (err: any) {
+      error('MCP server health check failed', { 
+        error: err.message,
+        code: err.code,
+        response: err.response?.data,
+        config: {
+          url: err.config?.url,
+          params: err.config?.params,
+          method: err.config?.method
+        }
+      });
       return false;
     }
   }
@@ -122,7 +144,11 @@ export class MCPClient {
    */
   async getAvailableTools(): Promise<string[]> {
     try {
-      const response = await this.client.get('/');
+      const response = await this.client.get('/', {
+        params: {
+          apiKey: MCP_CONFIG.API_KEY
+        }
+      });
       return response.data?.tools || [];
     } catch (err) {
       error('Failed to get available tools from MCP server', { error: err });
