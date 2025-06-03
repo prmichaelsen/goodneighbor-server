@@ -10,7 +10,8 @@ export enum ClientMessageType {
   AUTH = 'auth',
   PING = 'ping',
   CHAT_COMPLETION = 'chat_completion',
-  TOOL_SELECTION = 'tool_selection', // New: User selects a suggested tool
+  TOOL_SELECTION = 'tool_selection', // User selects a suggested tool
+  NATURAL_LANGUAGE_SEARCH = 'natural_language_search', // New: Natural language search
 }
 
 /**
@@ -24,7 +25,8 @@ export enum ServerMessageType {
   PONG = 'pong',
   CHAT_COMPLETION_CHUNK = 'chat_completion_chunk',
   CHAT_COMPLETION_RESULT = 'chat_completion_result',
-  TOOL_SUGGESTIONS = 'tool_suggestions', // New: Server suggests tools
+  TOOL_SUGGESTIONS = 'tool_suggestions', // Server suggests tools
+  NATURAL_LANGUAGE_SEARCH_RESULT = 'natural_language_search_result', // New: Natural language search result
 }
 
 /**
@@ -84,9 +86,21 @@ export interface ToolSelectionMessage extends BaseMessage {
 }
 
 /**
+ * Natural language search message from client
+ */
+export interface NaturalLanguageSearchMessage extends BaseMessage {
+  type: ClientMessageType.NATURAL_LANGUAGE_SEARCH;
+  query: string;
+  options?: {
+    enhanceExisting?: boolean;
+    existingParams?: Record<string, any>;
+  };
+}
+
+/**
  * Union type for all client messages
  */
-export type ClientMessage = AuthMessage | ToolCallMessage | PingMessage | ChatCompletionMessage | ToolSelectionMessage;
+export type ClientMessage = AuthMessage | ToolCallMessage | PingMessage | ChatCompletionMessage | ToolSelectionMessage | NaturalLanguageSearchMessage;
 
 /**
  * Authentication result message from server
@@ -193,6 +207,18 @@ export interface ToolSuggestionsMessage extends BaseMessage {
 }
 
 /**
+ * Natural language search result message from server
+ */
+export interface NaturalLanguageSearchResultMessage extends BaseMessage {
+  type: ServerMessageType.NATURAL_LANGUAGE_SEARCH_RESULT;
+  success: boolean;
+  searchParams: Record<string, any>;
+  searchResults?: any;
+  error?: string;
+  details?: string;
+}
+
+/**
  * Union type for all server messages
  */
-export type ServerMessage = AuthResultMessage | ToolResultMessage | ErrorMessage | StatusMessage | PongMessage | ChatCompletionChunkMessage | ChatCompletionResultMessage | ToolSuggestionsMessage;
+export type ServerMessage = AuthResultMessage | ToolResultMessage | ErrorMessage | StatusMessage | PongMessage | ChatCompletionChunkMessage | ChatCompletionResultMessage | ToolSuggestionsMessage | NaturalLanguageSearchResultMessage;

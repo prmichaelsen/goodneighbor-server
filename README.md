@@ -8,6 +8,8 @@ A TypeScript Node.js WebSocket server that acts as a bridge between the GoodNeig
 - Authentication using API keys
 - Connection management with automatic ping/pong
 - Integration with GoodNeighbor MCP server
+- Natural language search with Algolia integration
+- AI-powered chat completions with DeepSeek
 - Health check endpoints
 - Docker containerization
 - Google Cloud Run deployment configuration
@@ -186,6 +188,69 @@ gcloud builds submit --config cloudbuild.yaml
 }
 ```
 
+4. Chat Completion:
+
+```json
+{
+  "type": "chat_completion",
+  "id": "unique-message-id",
+  "model": "deepseek-chat",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello, how are you?"}
+  ],
+  "stream": false,
+  "temperature": 0.7
+}
+```
+
+5. Tool Selection:
+
+```json
+{
+  "type": "tool_selection",
+  "id": "unique-message-id",
+  "toolName": "search_posts",
+  "arguments": {
+    "query": "community safety",
+    "filters": "type:post"
+  },
+  "originalMessageId": "previous-message-id"
+}
+```
+
+6. Natural Language Search:
+
+```json
+{
+  "type": "natural_language_search",
+  "id": "unique-message-id",
+  "query": "Find recent posts about community safety in Phoenix",
+  "options": {
+    "enhanceExisting": false
+  }
+}
+```
+
+7. Enhance Existing Search:
+
+```json
+{
+  "type": "natural_language_search",
+  "id": "unique-message-id",
+  "query": "only show posts from the last week",
+  "options": {
+    "enhanceExisting": true,
+    "existingParams": {
+      "query": "community safety",
+      "filters": "type:post",
+      "hitsPerPage": 20,
+      "page": 0
+    }
+  }
+}
+```
+
 #### Server to Client Messages
 
 1. Authentication Result:
@@ -241,7 +306,118 @@ gcloud builds submit --config cloudbuild.yaml
 }
 ```
 
-## Client Example
+6. Chat Completion Chunk (for streaming):
+
+```json
+{
+  "type": "chat_completion_chunk",
+  "id": "unique-message-id",
+  "chunk": {
+    "id": "chunk-id",
+    "object": "chat.completion.chunk",
+    "created": 1622548800000,
+    "model": "deepseek-chat",
+    "choices": [
+      {
+        "index": 0,
+        "delta": {
+          "content": "Hello"
+        },
+        "finish_reason": null
+      }
+    ]
+  }
+}
+```
+
+7. Chat Completion Result (for non-streaming):
+
+```json
+{
+  "type": "chat_completion_result",
+  "id": "unique-message-id",
+  "result": {
+    "id": "result-id",
+    "object": "chat.completion",
+    "created": 1622548800000,
+    "model": "deepseek-chat",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "Hello! How can I help you today?"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 20,
+      "completion_tokens": 10,
+      "total_tokens": 30
+    }
+  }
+}
+```
+
+8. Tool Suggestions:
+
+```json
+{
+  "type": "tool_suggestions",
+  "id": "unique-message-id",
+  "suggestions": [
+    {
+      "tool": "search_posts",
+      "description": "Search posts using Algolia proxy",
+      "confidence": 0.9,
+      "suggestedArgs": {
+        "query": "community safety",
+        "hitsPerPage": 5
+      }
+    }
+  ],
+  "originalQuery": "Find posts about community safety"
+}
+```
+
+9. Natural Language Search Result:
+
+```json
+{
+  "type": "natural_language_search_result",
+  "id": "unique-message-id",
+  "success": true,
+  "searchParams": {
+    "query": "community safety",
+    "filters": "type:post AND refs.hasViewer:\"public\"",
+    "hitsPerPage": 20,
+    "page": 0
+  },
+  "searchResults": {
+    "status": 200,
+    "data": {
+      "hits": [
+        {
+          "objectID": "post-123",
+          "type": "post",
+          "title": "Community Safety Tips",
+          "search": "Here are some tips for community safety..."
+        }
+      ],
+      "nbHits": 10,
+      "page": 0,
+      "nbPages": 1,
+      "hitsPerPage": 20,
+      "processingTimeMS": 5
+    }
+  }
+}
+```
+
+## Client Examples
+
+### Basic Connection Example
 
 Here's a simple example of how to connect to the WebSocket server from a client:
 
@@ -325,6 +501,108 @@ socket.onerror = (error) => {
 socket.onclose = (event) => {
   console.log('Connection closed:', event.code, event.reason);
 };
+```
+
+### Natural Language Search Example
+
+```javascript
+// Connect to the WebSocket server
+const socket = new WebSocket('ws://localhost:3000/ws');
+
+// Generate a unique message ID
+function generateMessageId() {
+  return Date.now().toString();
+}
+
+// Handle connection open
+socket.onopen = () => {
+  console.log('Connected to WebSocket server');
+  
+  // Authenticate
+  const authMessage = {
+    type: 'auth',
+    id: generateMessageId(),
+    auth: {
+      apiKey: 'your-client-auth-api-key'
+    }
+  };
+  
+  socket.send(JSON.stringify(authMessage));
+};
+
+// Handle messages from the server
+socket.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  console.log('Received message:', message);
+  
+  // Handle different message types
+  switch (message.type) {
+    case 'auth_result':
+      if (message.success) {
+        console.log('Authentication successful');
+        
+        // Send natural language search query
+        const searchMessage = {
+          type: 'natural_language_search',
+          id: generateMessageId(),
+          query: 'Find recent posts about community safety in Phoenix',
+          options: {
+            enhanceExisting: false
+          }
+        };
+        
+        socket.send(JSON.stringify(searchMessage));
+      } else {
+        console.error('Authentication failed:', message.error);
+      }
+      break;
+    
+    case 'natural_language_search_result':
+      if (message.success) {
+        console.log('Search parameters:', message.searchParams);
+        console.log('Search results:', message.searchResults);
+      } else {
+        console.error('Search failed:', message.error);
+      }
+      break;
+    
+    case 'error':
+      console.error('Error:', message.error);
+      break;
+    
+    case 'status':
+      console.log('Status:', message.status);
+      break;
+  }
+};
+
+// Handle errors
+socket.onerror = (error) => {
+  console.error('WebSocket error:', error);
+};
+
+// Handle connection close
+socket.onclose = (event) => {
+  console.log('Connection closed:', event.code, event.reason);
+};
+```
+
+## Testing
+
+Use the provided test scripts to test the WebSocket server:
+
+```bash
+# Test basic WebSocket functionality
+node test-websocket.js
+
+# Test natural language search
+node test-websocket-natural-language-search.js "Find posts about community safety"
+
+# Test enhancing existing search parameters
+node test-websocket-enhance-search.js "only show posts from the last week"
+
+# Test chat completion
+node test-websocket-chat-completion.js
 ```
 
 ## License

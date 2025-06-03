@@ -15,12 +15,15 @@ import {
   PingMessage,
   ChatCompletionMessage,
   ToolSelectionMessage,
-  ToolSuggestionsMessage
+  ToolSuggestionsMessage,
+  NaturalLanguageSearchMessage,
+  NaturalLanguageSearchResultMessage
 } from '../types/messages';
 import { SECURITY_CONFIG, WS_CONFIG, DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
 import { mcpClient } from './mcp-client';
 import { deepseekClient } from './deepseek-client';
+import { algoliaSearchService } from './algolia-search-service';
 
 /**
  * Connection state
@@ -154,6 +157,10 @@ export class ConnectionManager {
         
         case ClientMessageType.TOOL_SELECTION:
           await this.handleToolSelectionMessage(connection, message as ToolSelectionMessage);
+          break;
+        
+        case ClientMessageType.NATURAL_LANGUAGE_SEARCH:
+          await this.handleNaturalLanguageSearchMessage(connection, message as NaturalLanguageSearchMessage);
           break;
         
         default:
@@ -612,6 +619,99 @@ export class ConnectionManager {
    */
   getConnectionCount(): number {
     return this.connections.size;
+  }
+
+  /**
+   * Handle a natural language search message
+   */
+  private async handleNaturalLanguageSearchMessage(connection: ConnectionState, message: NaturalLanguageSearchMessage): Promise<void> {
+    const { id, query, options } = message;
+    
+    // Check if authenticated
+    if (!connection.isAuthenticated) {
+      this.sendErrorMessage(connection, id, 'Not authenticated');
+      return;
+    }
+    
+    // Send status message
+    this.sendMessage(connection, {
+      type: ServerMessageType.STATUS,
+      id,
+      status: `Processing natural language search: "${query}"`,
+    });
+    
+    try {
+      let result;
+      
+      // Check if we should enhance existing parameters
+      if (options?.enhanceExisting && options.existingParams) {
+        info(`Enhancing existing search params with natural language query for connection ${connection.id}`, {
+          messageId: id,
+          query,
+          existingParams: options.existingParams
+        });
+        
+        // Enhance existing parameters
+        const enhancedParams = await algoliaSearchService.enhanceSearchParams(
+          options.existingParams,
+          query
+        );
+
+        console.log(enhancedParams);
+        
+        // Call the MCP search_posts tool with the enhanced parameters
+        const searchResult = await mcpClient.callTool({
+          tool: 'search_posts',
+          arguments: enhancedParams
+        });
+        
+        if (!searchResult.success) {
+          throw new Error(searchResult.error || 'Search failed');
+        }
+        
+        result = {
+          success: true,
+          searchParams: enhancedParams,
+          searchResults: searchResult.data
+        };
+      } else {
+        // Perform a new natural language search
+        info(`Performing new natural language search for connection ${connection.id}`, {
+          messageId: id,
+          query
+        });
+        
+        result = await algoliaSearchService.search(query);
+      }
+      
+      if (result.success) {
+        // Send search result
+        this.sendMessage(connection, {
+          type: ServerMessageType.NATURAL_LANGUAGE_SEARCH_RESULT,
+          id,
+          success: true,
+          searchParams: result.searchParams || {},
+          searchResults: result.searchResults
+        } as NaturalLanguageSearchResultMessage);
+        
+        info(`Natural language search completed successfully for connection ${connection.id}`, {
+          messageId: id,
+          query,
+          resultCount: result.searchResults?.hits?.length || 0
+        });
+      } else {
+        // Send error message
+        this.sendErrorMessage(connection, id, result.error || 'Natural language search failed');
+      }
+    } catch (err: any) {
+      error(`Error in natural language search for connection ${connection.id}`, { 
+        error: err,
+        messageId: id,
+        query,
+        stack: err.stack
+      });
+      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+    }
   }
 
   /**

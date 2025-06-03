@@ -25,7 +25,7 @@ export const SERVER_CONFIG = {
 export const WS_CONFIG = {
   PATH: process.env.WS_PATH || '/ws',
   PING_INTERVAL: 30000, // 30 seconds
-  PING_TIMEOUT: 10000, // 10 seconds
+  PING_TIMEOUT: 30000, // 10 seconds
 };
 
 /**
