@@ -10,6 +10,7 @@ import cors from 'cors';
 import { SERVER_CONFIG, WS_CONFIG, validateConfig } from './config';
 import { connectionManager } from './services/connection-manager';
 import { mcpClient } from './services/mcp-client';
+import { deepseekClient } from './services/deepseek-client';
 import { debug, error, info } from './utils/logger';
 
 /**
@@ -86,18 +87,29 @@ export class Server {
         // Check MCP server health
         const mcpHealth = await mcpClient.healthCheck();
         
-        if (mcpHealth) {
+        // Check DeepSeek API health
+        const deepseekHealth = await deepseekClient.healthCheck();
+        
+        if (mcpHealth && deepseekHealth) {
           res.status(200).json({
             status: 'ok',
             connections: {
               total: connectionManager.getConnectionCount(),
               authenticated: connectionManager.getAuthenticatedConnectionCount(),
             },
+            services: {
+              mcp: 'healthy',
+              deepseek: 'healthy'
+            }
           });
         } else {
           res.status(500).json({
             status: 'error',
-            error: 'MCP server is not healthy',
+            error: 'One or more services are not healthy',
+            services: {
+              mcp: mcpHealth ? 'healthy' : 'unhealthy',
+              deepseek: deepseekHealth ? 'healthy' : 'unhealthy'
+            }
           });
         }
       } catch (err) {

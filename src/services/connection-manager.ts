@@ -12,11 +12,13 @@ import {
   ServerMessageType,
   AuthMessage,
   ToolCallMessage,
-  PingMessage
+  PingMessage,
+  ChatCompletionMessage
 } from '../types/messages';
 import { SECURITY_CONFIG, WS_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
 import { mcpClient } from './mcp-client';
+import { deepseekClient } from './deepseek-client';
 
 /**
  * Connection state
@@ -142,6 +144,10 @@ export class ConnectionManager {
         
         case ClientMessageType.PING:
           this.handlePingMessage(connection, message as PingMessage);
+          break;
+        
+        case ClientMessageType.CHAT_COMPLETION:
+          await this.handleChatCompletionMessage(connection, message as ChatCompletionMessage);
           break;
         
         default:
@@ -273,6 +279,76 @@ export class ConnectionManager {
       id,
       timestamp: Date.now(),
     });
+  }
+
+  /**
+   * Handle a chat completion message
+   */
+  private async handleChatCompletionMessage(connection: ConnectionState, message: ChatCompletionMessage): Promise<void> {
+    const { id, model, messages, stream, temperature } = message;
+    
+    // Check if authenticated
+    if (!connection.isAuthenticated) {
+      this.sendErrorMessage(connection, id, 'Not authenticated');
+      return;
+    }
+    
+    // Send status message
+    this.sendMessage(connection, {
+      type: ServerMessageType.STATUS,
+      id,
+      status: `Processing chat completion`,
+    });
+    
+    try {
+      if (stream) {
+        // Handle streaming response
+        const streamEmitter = deepseekClient.createChatCompletionStream({
+          model,
+          messages,
+          temperature,
+          stream: true
+        });
+        
+        streamEmitter.on('data', (chunk) => {
+          this.sendMessage(connection, {
+            type: ServerMessageType.CHAT_COMPLETION_CHUNK,
+            id,
+            chunk
+          });
+        });
+        
+        streamEmitter.on('error', (err) => {
+          error(`Error in chat completion stream for connection ${connection.id}`, { error: err });
+          this.sendErrorMessage(connection, id, err.message || 'Streaming error');
+        });
+        
+        streamEmitter.on('end', () => {
+          debug(`Chat completion stream ended for connection ${connection.id}`);
+        });
+      } else {
+        // Handle non-streaming response
+        const result = await deepseekClient.createChatCompletion({
+          model,
+          messages,
+          temperature,
+          stream: false
+        });
+        
+        if (result.success) {
+          this.sendMessage(connection, {
+            type: ServerMessageType.CHAT_COMPLETION_RESULT,
+            id,
+            result: result.data
+          });
+        } else {
+          this.sendErrorMessage(connection, id, result.error || 'Chat completion failed');
+        }
+      }
+    } catch (err: any) {
+      error(`Error in chat completion for connection ${connection.id}`, { error: err });
+      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+    }
   }
 
   /**

@@ -38,6 +38,15 @@ export const MCP_CONFIG = {
 };
 
 /**
+ * DeepSeek API configuration
+ */
+export const DEEPSEEK_CONFIG = {
+  API_KEY: process.env.DEEPSEEK_API_KEY || '',
+  TIMEOUT: 60000, // 60 seconds for longer completions
+  DEFAULT_MODEL: 'deepseek-chat',
+};
+
+/**
  * Security configuration
  */
 export const SECURITY_CONFIG = {
@@ -56,6 +65,10 @@ export function validateConfig(): void {
 
   if (!SECURITY_CONFIG.API_KEY) {
     missingVars.push('CLIENT_AUTH_API_KEY');
+  }
+
+  if (!DEEPSEEK_CONFIG.API_KEY) {
+    missingVars.push('DEEPSEEK_API_KEY');
   }
 
   if (missingVars.length > 0) {
