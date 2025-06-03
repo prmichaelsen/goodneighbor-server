@@ -1,0 +1,45 @@
+# Cloud Build configuration for GoodNeighbor WebSocket Server
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/goodneighbor-server:$COMMIT_SHA', '.']
+
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/goodneighbor-server:$COMMIT_SHA']
+
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'goodneighbor-server'
+      - '--image=gcr.io/$PROJECT_ID/goodneighbor-server:$COMMIT_SHA'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--min-instances=1'
+      - '--max-instances=10'
+      - '--memory=256Mi'
+      - '--cpu=1'
+      - '--set-env-vars=NODE_ENV=production'
+      - '--set-env-vars=WS_PATH=/ws'
+      - '--set-secrets=MCP_SERVER_API_KEY=${_MCP_API_KEY_SECRET}'
+      - '--set-secrets=CLIENT_AUTH_API_KEY=${_CLIENT_AUTH_API_KEY_SECRET}'
+      - '--set-env-vars=MCP_SERVER_URL=${_MCP_SERVER_URL}'
+
+# Store the built image in Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/goodneighbor-server:$COMMIT_SHA'
+
+# Substitution variables
+substitutions:
+  _REGION: 'us-central1'
+  _MCP_SERVER_URL: 'https://goodneighbor-mcp-868795766038.us-central1.run.app'
+  _MCP_API_KEY_SECRET: 'goodneighbor-debug-api-key:latest'
+  _CLIENT_AUTH_API_KEY_SECRET: 'goodneighbor-client-auth-key:latest'
+
+# Timeout for the build
+timeout: '1200s'
