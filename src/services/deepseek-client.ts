@@ -6,7 +6,7 @@
 import axios, { AxiosInstance } from 'axios';
 import { EventEmitter } from 'events';
 import { DEEPSEEK_CONFIG } from '../config';
-import { debug, error, info } from '../utils/logger';
+import { debug, error, info, warn } from '../utils/logger';
 
 /**
  * DeepSeek Chat Completion Parameters
@@ -94,31 +94,98 @@ export class DeepSeekClient {
       }
     });
 
-    // Add request interceptor for logging
+    // Log the configuration (with masked API key)
+    const maskedApiKey = DEEPSEEK_CONFIG.API_KEY ? 
+      `${DEEPSEEK_CONFIG.API_KEY.substring(0, 4)}...${DEEPSEEK_CONFIG.API_KEY.substring(DEEPSEEK_CONFIG.API_KEY.length - 4)}` : 
+      'not-set';
+    
+    info('DeepSeek client initialized', {
+      baseURL: 'https://api.deepseek.com',
+      timeout: DEEPSEEK_CONFIG.TIMEOUT,
+      apiKeyPresent: !!DEEPSEEK_CONFIG.API_KEY,
+      apiKeyMasked: maskedApiKey,
+      defaultModel: DEEPSEEK_CONFIG.DEFAULT_MODEL
+    });
+
+    // Add request interceptor for detailed logging
     this.client.interceptors.request.use((config) => {
+      // Create a copy of headers to mask sensitive information
+      const safeHeaders = { ...config.headers };
+      if (safeHeaders.Authorization && typeof safeHeaders.Authorization === 'string') {
+        safeHeaders.Authorization = safeHeaders.Authorization.replace(/Bearer\s+(.+)/, 'Bearer ***masked***');
+      }
+
       debug('Sending request to DeepSeek API', {
         method: config.method,
         url: config.url,
+        baseURL: config.baseURL,
+        fullURL: `${config.baseURL}${config.url}`,
+        headers: safeHeaders,
         data: config.data,
+        timeout: config.timeout
       });
       return config;
+    }, (err) => {
+      error('Error creating DeepSeek API request', {
+        message: err.message,
+        stack: err.stack,
+        code: err.code
+      });
+      return Promise.reject(err);
     });
 
-    // Add response interceptor for logging
+    // Add response interceptor for detailed logging
     this.client.interceptors.response.use(
       (response) => {
         debug('Received response from DeepSeek API', {
           status: response.status,
           statusText: response.statusText,
+          headers: response.headers,
           data: response.data,
+          size: JSON.stringify(response.data).length
         });
         return response;
       },
       (err) => {
-        error('Error in DeepSeek API response', {
+        // Detailed error logging
+        const errorContext: any = {
           message: err.message,
-          response: err.response?.data,
-        });
+          code: err.code,
+          stack: err.stack,
+          isAxiosError: err.isAxiosError
+        };
+
+        // Add config if available
+        if (err.config) {
+          errorContext.config = {
+            method: err.config.method,
+            url: err.config.url,
+            baseURL: err.config.baseURL,
+            timeout: err.config.timeout
+          };
+        } else {
+          errorContext.config = 'No config available';
+        }
+
+        // Add response data if available
+        if (err.response) {
+          errorContext.response = {
+            status: err.response.status,
+            statusText: err.response.statusText,
+            headers: err.response.headers,
+            data: err.response.data
+          };
+        } else if (err.request) {
+          // The request was made but no response was received
+          errorContext.request = {
+            method: err.request.method,
+            path: err.request.path,
+            host: err.request.host,
+            protocol: err.request.protocol
+          };
+        }
+
+        error('Error in DeepSeek API response', errorContext);
         return Promise.reject(err);
       }
     );
@@ -418,30 +485,150 @@ export class DeepSeekClient {
 
   /**
    * Check if the DeepSeek API is healthy
+   * Enhanced with retries, timeouts, and detailed diagnostics
    */
   async healthCheck(): Promise<boolean> {
-    try {
-      info('Checking DeepSeek API health');
+    const maxRetries = 3;
+    const retryDelay = 1000; // 1 second
+    
+    // Log environment variables (masked for security)
+    info('DeepSeek healthCheck - Environment variables check', {
+      NODE_ENV: process.env.NODE_ENV || 'not set',
+      PORT: process.env.PORT || 'not set',
+      WS_PATH: process.env.WS_PATH || 'not set',
+      MCP_SERVER_URL: process.env.MCP_SERVER_URL || 'not set',
+      MCP_SERVER_API_KEY: process.env.MCP_SERVER_API_KEY ? 'set (masked)' : 'not set',
+      CLIENT_AUTH_API_KEY: process.env.CLIENT_AUTH_API_KEY ? 'set (masked)' : 'not set',
+      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY ? 'set (masked)' : 'not set',
+    });
+    
+    // Log DeepSeek config
+    info('DeepSeek healthCheck - Config check', {
+      API_KEY_SET: !!DEEPSEEK_CONFIG.API_KEY,
+      DEFAULT_MODEL: DEEPSEEK_CONFIG.DEFAULT_MODEL || 'not set',
+      TIMEOUT: DEEPSEEK_CONFIG.TIMEOUT || 'not set',
+    });
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      // Define startTime outside try/catch so it's available in both blocks
+      let startTime = Date.now(); // Initialize with current time
       
-      // Simple request to test the API
-      const response = await this.client.post('/chat/completions', {
-        model: DEEPSEEK_CONFIG.DEFAULT_MODEL,
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant.' },
-          { role: 'user', content: 'Hello!' }
-        ],
-        max_tokens: 5,
-        stream: false
-      });
-      
-      return response.status === 200;
-    } catch (err: any) {
-      error('DeepSeek API health check failed', { 
-        error: err.message,
-        response: err.response?.data
-      });
-      return false;
+      try {
+        info(`Checking DeepSeek API health (attempt ${attempt}/${maxRetries})`);
+        
+        // Check if API key is set
+        if (!DEEPSEEK_CONFIG.API_KEY) {
+          error('DeepSeek API health check failed: API key not set');
+          return false;
+        }
+        
+        // Log API key details (masked)
+        const maskedApiKey = DEEPSEEK_CONFIG.API_KEY ? 
+          `${DEEPSEEK_CONFIG.API_KEY.substring(0, 4)}...${DEEPSEEK_CONFIG.API_KEY.substring(DEEPSEEK_CONFIG.API_KEY.length - 4)}` : 
+          'not-set';
+        
+        info('DeepSeek API key details', {
+          apiKeyPresent: !!DEEPSEEK_CONFIG.API_KEY,
+          apiKeyLength: DEEPSEEK_CONFIG.API_KEY.length,
+          apiKeyMasked: maskedApiKey
+        });
+        
+        // Use a shorter timeout for health checks
+        const healthCheckTimeout = Math.min(DEEPSEEK_CONFIG.TIMEOUT, 10000); // 10 seconds max
+        
+        info(`Using timeout of ${healthCheckTimeout}ms for health check`);
+        
+        startTime = Date.now();
+        
+        // Log the request we're about to make
+        debug('Sending health check request to DeepSeek API', {
+          url: '/chat/completions',
+          model: DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          timeout: healthCheckTimeout,
+          baseURL: this.client.defaults.baseURL
+        });
+        
+        // Simple request to test the API with minimal tokens
+        const response = await this.client.post('/chat/completions', {
+          model: DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant.' },
+            { role: 'user', content: 'Hello!' }
+          ],
+          max_tokens: 5,
+          stream: false
+        }, {
+          timeout: healthCheckTimeout
+        });
+        
+        const duration = Date.now() - startTime;
+        
+        // Log successful health check with timing information
+        info('DeepSeek API health check successful', {
+          status: response.status,
+          statusText: response.statusText,
+          responseTime: `${duration}ms`,
+          model: DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          responseSize: JSON.stringify(response.data).length
+        });
+        
+        return response.status === 200;
+      } catch (err: any) {
+        // Calculate duration if startTime is defined, otherwise use 'unknown'
+        const endTime = Date.now();
+        const duration = typeof startTime !== 'undefined' ? endTime - startTime : 'unknown';
+        const durationStr = typeof duration === 'number' ? `${duration}ms` : duration;
+        
+        // Detailed error logging
+        const errorContext: any = { 
+          attempt,
+          error: err.message,
+          code: err.code,
+          isAxiosError: err.isAxiosError || false,
+          isNetworkError: err.code === 'ECONNABORTED' || err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND',
+          duration: durationStr
+        };
+        
+        // Add response data if available
+        if (err.response) {
+          errorContext.response = {
+            status: err.response.status,
+            statusText: err.response.statusText,
+            data: err.response.data
+          };
+        }
+        
+        // Add request data if available
+        if (err.config) {
+          errorContext.request = {
+            url: `${err.config.baseURL}${err.config.url}`,
+            method: err.config.method,
+            timeout: err.config.timeout
+          };
+        }
+        
+        // Add more detailed error information
+        if (err.isAxiosError) {
+          errorContext.axiosDetails = {
+            isTimeout: err.code === 'ECONNABORTED',
+            isNetworkError: !err.response,
+            hasResponse: !!err.response
+          };
+        }
+        
+        error(`DeepSeek API health check failed (attempt ${attempt}/${maxRetries})`, errorContext);
+        
+        // If we have more retries left, wait before trying again
+        if (attempt < maxRetries) {
+          info(`Retrying DeepSeek API health check in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        } else {
+          warn('DeepSeek API health check failed after all retry attempts');
+        }
+      }
     }
+    
+    return false;
   }
 }
 

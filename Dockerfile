@@ -27,6 +27,8 @@ WORKDIR /app
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=8080
+ENV DEBUG=true
+ENV LOG_LEVEL=debug
 
 # Copy package.json and package-lock.json
 COPY package*.json ./

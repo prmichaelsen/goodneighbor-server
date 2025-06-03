@@ -15,12 +15,34 @@ export enum LogLevel {
   ERROR = 'ERROR',
 }
 
+// Map log level strings to enum values
+const LOG_LEVEL_MAP: Record<string, LogLevel> = {
+  'debug': LogLevel.DEBUG,
+  'info': LogLevel.INFO,
+  'warn': LogLevel.WARN,
+  'error': LogLevel.ERROR,
+};
+
+// Get configured log level from environment or default to INFO
+const configuredLogLevel = process.env.LOG_LEVEL?.toLowerCase();
+const CURRENT_LOG_LEVEL = configuredLogLevel && LOG_LEVEL_MAP[configuredLogLevel] 
+  ? LOG_LEVEL_MAP[configuredLogLevel] 
+  : (process.env.DEBUG === 'true' ? LogLevel.DEBUG : LogLevel.INFO);
+
+// Log level priorities (higher number = higher priority)
+const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
+  [LogLevel.DEBUG]: 0,
+  [LogLevel.INFO]: 1,
+  [LogLevel.WARN]: 2,
+  [LogLevel.ERROR]: 3,
+};
+
 /**
  * Log a message with context data
  */
 export function log(level: LogLevel, message: string, context?: any): void {
-  // Skip debug logs in production
-  if (level === LogLevel.DEBUG && SERVER_CONFIG.IS_PRODUCTION) {
+  // Skip logs below the configured level
+  if (LOG_LEVEL_PRIORITY[level] < LOG_LEVEL_PRIORITY[CURRENT_LOG_LEVEL]) {
     return;
   }
 

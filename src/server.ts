@@ -7,11 +7,11 @@ import http from 'http';
 import express from 'express';
 import WebSocket from 'ws';
 import cors from 'cors';
-import { SERVER_CONFIG, WS_CONFIG, validateConfig } from './config';
+import { SERVER_CONFIG, WS_CONFIG, validateConfig, DEEPSEEK_CONFIG } from './config';
 import { connectionManager } from './services/connection-manager';
 import { mcpClient } from './services/mcp-client';
 import { deepseekClient } from './services/deepseek-client';
-import { debug, error, info } from './utils/logger';
+import { debug, error, info, warn } from './utils/logger';
 
 /**
  * Server class
@@ -81,43 +81,142 @@ export class Server {
    * Configure Express routes
    */
   private configureRoutes(): void {
-    // Health check endpoint
+    // Health check endpoint with enhanced diagnostics
     this.app.get('/health', async (req, res) => {
       try {
+        info('Health check requested', {
+          ip: req.ip,
+          userAgent: req.headers['user-agent']
+        });
+        
+        const startTime = Date.now();
+        const healthResults: Record<string, any> = {
+          timestamp: new Date().toISOString(),
+          environment: SERVER_CONFIG.NODE_ENV,
+          uptime: process.uptime(),
+          connections: {
+            total: connectionManager.getConnectionCount(),
+            authenticated: connectionManager.getAuthenticatedConnectionCount(),
+          },
+          services: {}
+        };
+        
         // Check MCP server health
-        const mcpHealth = await mcpClient.healthCheck();
-        
-        // Check DeepSeek API health
-        const deepseekHealth = await deepseekClient.healthCheck();
-        
-        if (mcpHealth && deepseekHealth) {
-          res.status(200).json({
-            status: 'ok',
-            connections: {
-              total: connectionManager.getConnectionCount(),
-              authenticated: connectionManager.getAuthenticatedConnectionCount(),
-            },
-            services: {
-              mcp: 'healthy',
-              deepseek: 'healthy'
-            }
+        info('Checking MCP server health');
+        try {
+          const mcpStartTime = Date.now();
+          const mcpHealth = await mcpClient.healthCheck();
+          const mcpDuration = Date.now() - mcpStartTime;
+          
+          healthResults.services.mcp = {
+            status: mcpHealth ? 'healthy' : 'unhealthy',
+            responseTime: `${mcpDuration}ms`
+          };
+          
+          info(`MCP server health check ${mcpHealth ? 'succeeded' : 'failed'}`, {
+            duration: mcpDuration
           });
-        } else {
-          res.status(500).json({
+        } catch (mcpErr: any) {
+          error('MCP health check error', { error: mcpErr });
+          healthResults.services.mcp = {
             status: 'error',
-            error: 'One or more services are not healthy',
-            services: {
-              mcp: mcpHealth ? 'healthy' : 'unhealthy',
-              deepseek: deepseekHealth ? 'healthy' : 'unhealthy'
-            }
+            error: mcpErr.message
+          };
+        }
+        
+        // Check DeepSeek API health with detailed diagnostics
+        info('Checking DeepSeek API health');
+        try {
+          // Log environment variables for DeepSeek (masked for security)
+          debug('DeepSeek environment variables', {
+            DEEPSEEK_API_KEY: DEEPSEEK_CONFIG.API_KEY ? 
+              `${DEEPSEEK_CONFIG.API_KEY.substring(0, 4)}...${DEEPSEEK_CONFIG.API_KEY.substring(DEEPSEEK_CONFIG.API_KEY.length - 4)}` : 
+              'not-set',
+            DEEPSEEK_API_KEY_LENGTH: DEEPSEEK_CONFIG.API_KEY?.length || 0,
+            DEFAULT_MODEL: DEEPSEEK_CONFIG.DEFAULT_MODEL,
+            TIMEOUT: DEEPSEEK_CONFIG.TIMEOUT,
+            NODE_ENV: process.env.NODE_ENV,
+            DEBUG: process.env.DEBUG,
+            LOG_LEVEL: process.env.LOG_LEVEL
+          });
+          
+          const deepseekStartTime = Date.now();
+          info('Calling deepseekClient.healthCheck()');
+          const deepseekHealth = await deepseekClient.healthCheck();
+          const deepseekDuration = Date.now() - deepseekStartTime;
+          
+          healthResults.services.deepseek = {
+            status: deepseekHealth ? 'healthy' : 'unhealthy',
+            responseTime: `${deepseekDuration}ms`,
+            apiKeyConfigured: !!DEEPSEEK_CONFIG.API_KEY,
+            apiKeyLength: DEEPSEEK_CONFIG.API_KEY?.length || 0,
+            defaultModel: DEEPSEEK_CONFIG.DEFAULT_MODEL
+          };
+          
+          info(`DeepSeek API health check ${deepseekHealth ? 'succeeded' : 'failed'}`, {
+            duration: deepseekDuration
+          });
+        } catch (deepseekErr: any) {
+          error('DeepSeek health check error', { 
+            error: deepseekErr.message,
+            stack: deepseekErr.stack,
+            code: deepseekErr.code,
+            isAxiosError: deepseekErr.isAxiosError || false
+          });
+          
+          healthResults.services.deepseek = {
+            status: 'error',
+            error: deepseekErr.message,
+            errorCode: deepseekErr.code,
+            isAxiosError: deepseekErr.isAxiosError || false
+          };
+          
+          // Add response data if available
+          if (deepseekErr.response) {
+            healthResults.services.deepseek.response = {
+              status: deepseekErr.response.status,
+              statusText: deepseekErr.response.statusText,
+              data: deepseekErr.response.data
+            };
+          }
+          
+          // Add request data if available
+          if (deepseekErr.config) {
+            healthResults.services.deepseek.request = {
+              url: deepseekErr.config.url,
+              method: deepseekErr.config.method,
+              baseURL: deepseekErr.config.baseURL,
+              timeout: deepseekErr.config.timeout
+            };
+          }
+        }
+        
+        // Calculate overall health status
+        const allHealthy = 
+          healthResults.services.mcp?.status === 'healthy' && 
+          healthResults.services.deepseek?.status === 'healthy';
+        
+        healthResults.status = allHealthy ? 'ok' : 'error';
+        healthResults.responseTime = `${Date.now() - startTime}ms`;
+        
+        // Log the health check result
+        if (allHealthy) {
+          info('Health check succeeded', healthResults);
+          res.status(200).json(healthResults);
+        } else {
+          warn('Health check failed', healthResults);
+          res.status(503).json({
+            ...healthResults,
+            error: 'One or more services are not healthy'
           });
         }
-      } catch (err) {
-        error('Health check failed', { error: err });
+      } catch (err: any) {
+        error('Health check failed with exception', { error: err });
         
         res.status(500).json({
           status: 'error',
-          error: 'Health check failed',
+          error: 'Health check failed: ' + err.message,
+          timestamp: new Date().toISOString()
         });
       }
     });

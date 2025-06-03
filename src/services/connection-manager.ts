@@ -299,6 +299,16 @@ export class ConnectionManager {
       return;
     }
     
+    // Log detailed information about the chat completion request
+    info(`Processing chat completion for connection ${connection.id}`, {
+      messageId: id,
+      model: model || 'default',
+      messageCount: messages.length,
+      lastMessageLength: messages[messages.length - 1]?.content?.length || 0,
+      streaming: stream,
+      temperature
+    });
+    
     // Send status message
     this.sendMessage(connection, {
       type: ServerMessageType.STATUS,
@@ -308,7 +318,13 @@ export class ConnectionManager {
     
     try {
       if (stream) {
+        debug(`Using streaming mode for chat completion (connection ${connection.id})`, {
+          messageId: id,
+          model
+        });
+        
         // Handle streaming response
+        const startTime = Date.now();
         const streamEmitter = deepseekClient.createChatCompletionStream({
           model,
           messages,
@@ -316,7 +332,19 @@ export class ConnectionManager {
           stream: true
         });
         
+        let chunkCount = 0;
+        
         streamEmitter.on('data', (chunk) => {
+          chunkCount++;
+          
+          // Log every 10th chunk to avoid excessive logging
+          if (chunkCount % 10 === 0) {
+            debug(`Received stream chunk ${chunkCount} for connection ${connection.id}`, {
+              messageId: id,
+              elapsedTime: `${Date.now() - startTime}ms`
+            });
+          }
+          
           this.sendMessage(connection, {
             type: ServerMessageType.CHAT_COMPLETION_CHUNK,
             id,
@@ -325,18 +353,41 @@ export class ConnectionManager {
         });
         
         streamEmitter.on('error', (err) => {
-          error(`Error in chat completion stream for connection ${connection.id}`, { error: err });
+          error(`Error in chat completion stream for connection ${connection.id}`, { 
+            error: err,
+            messageId: id,
+            model,
+            elapsedTime: `${Date.now() - startTime}ms`
+          });
           this.sendErrorMessage(connection, id, err.message || 'Streaming error');
         });
         
         streamEmitter.on('end', () => {
-          debug(`Chat completion stream ended for connection ${connection.id}`);
+          info(`Chat completion stream ended for connection ${connection.id}`, {
+            messageId: id,
+            totalChunks: chunkCount,
+            totalTime: `${Date.now() - startTime}ms`
+          });
         });
       } else {
+        debug(`Using non-streaming mode for chat completion (connection ${connection.id})`, {
+          messageId: id,
+          model
+        });
+        
         // Get available tools from MCP server
+        debug(`Fetching tools from MCP server for connection ${connection.id}`);
+        const toolsStartTime = Date.now();
         const tools = await mcpClient.formatToolsForDeepSeek();
+        debug(`Fetched ${tools.length} tools from MCP server in ${Date.now() - toolsStartTime}ms`);
         
         // Create chat completion with tools
+        info(`Creating chat completion with tools for connection ${connection.id}`, {
+          messageId: id,
+          toolCount: tools.length
+        });
+        
+        const completionStartTime = Date.now();
         const result = await deepseekClient.createChatCompletionWithTools({
           model,
           messages,
@@ -345,9 +396,22 @@ export class ConnectionManager {
           tools
         });
         
+        const completionDuration = Date.now() - completionStartTime;
+        
         if (result.success) {
+          info(`Chat completion successful for connection ${connection.id}`, {
+            messageId: id,
+            duration: `${completionDuration}ms`,
+            hasSuggestions: !!result.toolSuggestions && result.toolSuggestions.length > 0
+          });
+          
           // Check if there are tool suggestions
           if (result.toolSuggestions && result.toolSuggestions.length > 0) {
+            debug(`Sending ${result.toolSuggestions.length} tool suggestions to connection ${connection.id}`, {
+              messageId: id,
+              suggestions: result.toolSuggestions.map(s => s.tool)
+            });
+            
             // Send tool suggestions
             this.sendMessage(connection, {
               type: ServerMessageType.TOOL_SUGGESTIONS,
@@ -356,6 +420,11 @@ export class ConnectionManager {
               originalQuery: messages[messages.length - 1].content
             } as ToolSuggestionsMessage);
           } else {
+            debug(`Sending regular chat completion result to connection ${connection.id}`, {
+              messageId: id,
+              responseSize: JSON.stringify(result.data).length
+            });
+            
             // Send regular chat completion result
             this.sendMessage(connection, {
               type: ServerMessageType.CHAT_COMPLETION_RESULT,
@@ -364,11 +433,22 @@ export class ConnectionManager {
             });
           }
         } else {
+          error(`Chat completion failed for connection ${connection.id}`, {
+            messageId: id,
+            error: result.error,
+            details: result.details,
+            duration: `${completionDuration}ms`
+          });
+          
           this.sendErrorMessage(connection, id, result.error || 'Chat completion failed');
         }
       }
     } catch (err: any) {
-      error(`Error in chat completion for connection ${connection.id}`, { error: err });
+      error(`Error in chat completion for connection ${connection.id}`, { 
+        error: err,
+        messageId: id,
+        stack: err.stack
+      });
       this.sendErrorMessage(connection, id, err.message || 'Internal server error');
     }
   }

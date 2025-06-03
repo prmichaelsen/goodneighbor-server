@@ -28,6 +28,7 @@ steps:
       - '--set-env-vars=WS_PATH=/ws'
       - '--set-secrets=MCP_SERVER_API_KEY=${_MCP_API_KEY_SECRET}'
       - '--set-secrets=CLIENT_AUTH_API_KEY=${_CLIENT_AUTH_API_KEY_SECRET}'
+      - '--set-secrets=DEEPSEEK_API_KEY=${_DEEPSEEK_API_KEY_SECRET}'
       - '--set-env-vars=MCP_SERVER_URL=${_MCP_SERVER_URL}'
 
 # Store the built image in Container Registry
@@ -40,6 +41,7 @@ substitutions:
   _MCP_SERVER_URL: 'https://goodneighbor-mcp-868795766038.us-central1.run.app'
   _MCP_API_KEY_SECRET: 'goodneighbor-debug-api-key:1'
   _CLIENT_AUTH_API_KEY_SECRET: 'goodneighbor-client-auth-key:1'
+  _DEEPSEEK_API_KEY_SECRET: 'goodneighbor-deepseek-api-key:2'
 
 # Timeout for the build
 timeout: '1200s'
