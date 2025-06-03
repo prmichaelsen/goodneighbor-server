@@ -23,6 +23,50 @@ export interface DeepSeekChatCompletionParams {
 }
 
 /**
+ * Tool Parameter Schema
+ */
+export interface ToolParameterSchema {
+  type: string;
+  description?: string;
+  enum?: string[];
+  items?: {
+    type: string;
+  };
+  properties?: Record<string, ToolParameterSchema>;
+  required?: string[];
+}
+
+/**
+ * Tool Definition
+ */
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  parameters: {
+    type: string;
+    properties: Record<string, ToolParameterSchema>;
+    required?: string[];
+  };
+}
+
+/**
+ * DeepSeek Chat Completion with Tools Parameters
+ */
+export interface DeepSeekChatCompletionWithToolsParams extends DeepSeekChatCompletionParams {
+  tools: ToolDefinition[];
+}
+
+/**
+ * Tool Suggestion
+ */
+export interface ToolSuggestion {
+  tool: string;
+  description: string;
+  confidence: number;
+  suggestedArgs: Record<string, any>;
+}
+
+/**
  * DeepSeek Chat Completion Result
  */
 export interface DeepSeekChatCompletionResult {
@@ -30,6 +74,7 @@ export interface DeepSeekChatCompletionResult {
   data?: any;
   error?: string;
   details?: string;
+  toolSuggestions?: ToolSuggestion[];
 }
 
 /**
@@ -209,6 +254,167 @@ export class DeepSeekClient {
     // Return any unprocessed data
     return isEnd ? '' : lines[lines.length - 1];
   }
+
+  /**
+   * Create a chat completion with tools (non-streaming)
+   */
+  async createChatCompletionWithTools(params: DeepSeekChatCompletionWithToolsParams): Promise<DeepSeekChatCompletionResult> {
+    try {
+      info(`Creating DeepSeek chat completion with tools`, {
+        model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+        messages: params.messages,
+        toolCount: params.tools.length,
+      });
+
+      // Log the tools being sent to DeepSeek for debugging
+      debug('Tools being sent to DeepSeek:', JSON.stringify(params.tools, null, 2));
+
+      // For now, since we're simulating the tool suggestion functionality,
+      // we'll analyze the user's message to determine if any tools are relevant
+      const userMessage = params.messages[params.messages.length - 1].content.toLowerCase();
+      
+      // Check if the message contains keywords related to available tools
+      const toolSuggestions = this.analyzeMessageForToolSuggestions(userMessage, params.tools);
+      
+      if (toolSuggestions && toolSuggestions.length > 0) {
+        // If we have tool suggestions, return them directly
+        info(`Found ${toolSuggestions.length} tool suggestions for the message`);
+        
+        // Create a regular chat completion without tools for the content
+        const response = await this.client.post('/chat/completions', {
+          model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          messages: params.messages,
+          stream: false,
+          temperature: params.temperature !== undefined ? params.temperature : 0.7,
+          max_tokens: params.max_tokens,
+          top_p: params.top_p,
+          frequency_penalty: params.frequency_penalty,
+          presence_penalty: params.presence_penalty
+        });
+        
+        return {
+          success: true,
+          data: response.data,
+          toolSuggestions
+        };
+      } else {
+        // If no tool suggestions, just do a regular chat completion
+        info('No tool suggestions found, proceeding with regular chat completion');
+        
+        const response = await this.client.post('/chat/completions', {
+          model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          messages: params.messages,
+          stream: false,
+          temperature: params.temperature !== undefined ? params.temperature : 0.7,
+          max_tokens: params.max_tokens,
+          top_p: params.top_p,
+          frequency_penalty: params.frequency_penalty,
+          presence_penalty: params.presence_penalty
+        });
+        
+        return {
+          success: true,
+          data: response.data
+        };
+      }
+    } catch (err: any) {
+      error(`Failed to create DeepSeek chat completion with tools`, {
+        error: err.message,
+        response: err.response?.data,
+      });
+
+      return {
+        success: false,
+        error: err.message,
+        details: err.response?.data?.error || 'Unknown error',
+      };
+    }
+  }
+
+  /**
+   * Analyze a message to determine if any tools are relevant
+   * This is a simple keyword-based approach that can be replaced with a more sophisticated
+   * approach in the future (e.g., using an actual LLM to determine tool relevance)
+   */
+  private analyzeMessageForToolSuggestions(message: string, tools: ToolDefinition[]): ToolSuggestion[] | undefined {
+    const suggestions: ToolSuggestion[] = [];
+    
+    // Check for search-related keywords
+    if (message.includes('search') || message.includes('find') || message.includes('look for')) {
+      const searchTool = tools.find(tool => tool.name === 'search_posts');
+      if (searchTool) {
+        // Extract potential search query
+        let query = '';
+        const searchTerms = ['search for', 'search', 'find', 'look for'];
+        for (const term of searchTerms) {
+          if (message.includes(term)) {
+            const parts = message.split(term);
+            if (parts.length > 1) {
+              query = parts[1].trim().split(' ').slice(0, 5).join(' ');
+              break;
+            }
+          }
+        }
+        
+        if (!query && message.includes('about')) {
+          const parts = message.split('about');
+          if (parts.length > 1) {
+            query = parts[1].trim().split(' ').slice(0, 5).join(' ');
+          }
+        }
+        
+        if (!query) {
+          // Just use some words from the message
+          const words = message.split(' ').filter(word => word.length > 3);
+          query = words.slice(0, 3).join(' ');
+        }
+        
+        suggestions.push({
+          tool: 'search_posts',
+          description: searchTool.description,
+          confidence: 0.9,
+          suggestedArgs: {
+            query: query || 'community',
+            hitsPerPage: 5
+          }
+        });
+      }
+    }
+    
+    // Check for feed-related keywords
+    if (message.includes('feed') || message.includes('feeds') || message.includes('channel')) {
+      const feedTool = tools.find(tool => tool.name === 'get_feeds');
+      if (feedTool) {
+        suggestions.push({
+          tool: 'get_feeds',
+          description: feedTool.description,
+          confidence: 0.8,
+          suggestedArgs: {
+            limit: 10
+          }
+        });
+      }
+    }
+    
+    // Check for post-related keywords
+    if (message.includes('post') || message.includes('create') || message.includes('write')) {
+      const postTool = tools.find(tool => tool.name === 'create_post');
+      if (postTool) {
+        suggestions.push({
+          tool: 'create_post',
+          description: postTool.description,
+          confidence: 0.7,
+          suggestedArgs: {
+            title: 'New post about ' + message.split(' ').slice(0, 3).join(' '),
+            content: 'This is a draft post about ' + message
+          }
+        });
+      }
+    }
+    
+    return suggestions.length > 0 ? suggestions : undefined;
+  }
+
 
   /**
    * Check if the DeepSeek API is healthy

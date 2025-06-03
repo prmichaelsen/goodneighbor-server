@@ -10,6 +10,7 @@ export enum ClientMessageType {
   AUTH = 'auth',
   PING = 'ping',
   CHAT_COMPLETION = 'chat_completion',
+  TOOL_SELECTION = 'tool_selection', // New: User selects a suggested tool
 }
 
 /**
@@ -23,6 +24,7 @@ export enum ServerMessageType {
   PONG = 'pong',
   CHAT_COMPLETION_CHUNK = 'chat_completion_chunk',
   CHAT_COMPLETION_RESULT = 'chat_completion_result',
+  TOOL_SUGGESTIONS = 'tool_suggestions', // New: Server suggests tools
 }
 
 /**
@@ -72,9 +74,19 @@ export interface ChatCompletionMessage extends BaseMessage {
 }
 
 /**
+ * Tool selection message from client
+ */
+export interface ToolSelectionMessage extends BaseMessage {
+  type: ClientMessageType.TOOL_SELECTION;
+  toolName: string;
+  arguments: Record<string, any>;
+  originalMessageId: string; // Reference to the original message
+}
+
+/**
  * Union type for all client messages
  */
-export type ClientMessage = AuthMessage | ToolCallMessage | PingMessage | ChatCompletionMessage;
+export type ClientMessage = AuthMessage | ToolCallMessage | PingMessage | ChatCompletionMessage | ToolSelectionMessage;
 
 /**
  * Authentication result message from server
@@ -167,6 +179,20 @@ export interface ChatCompletionResultMessage extends BaseMessage {
 }
 
 /**
+ * Tool suggestion message from server
+ */
+export interface ToolSuggestionsMessage extends BaseMessage {
+  type: ServerMessageType.TOOL_SUGGESTIONS;
+  suggestions: Array<{
+    tool: string;
+    description: string;
+    confidence: number;
+    suggestedArgs: Record<string, any>;
+  }>;
+  originalQuery: string;
+}
+
+/**
  * Union type for all server messages
  */
-export type ServerMessage = AuthResultMessage | ToolResultMessage | ErrorMessage | StatusMessage | PongMessage | ChatCompletionChunkMessage | ChatCompletionResultMessage;
+export type ServerMessage = AuthResultMessage | ToolResultMessage | ErrorMessage | StatusMessage | PongMessage | ChatCompletionChunkMessage | ChatCompletionResultMessage | ToolSuggestionsMessage;

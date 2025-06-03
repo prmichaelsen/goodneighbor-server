@@ -13,7 +13,9 @@ import {
   AuthMessage,
   ToolCallMessage,
   PingMessage,
-  ChatCompletionMessage
+  ChatCompletionMessage,
+  ToolSelectionMessage,
+  ToolSuggestionsMessage
 } from '../types/messages';
 import { SECURITY_CONFIG, WS_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
@@ -148,6 +150,10 @@ export class ConnectionManager {
         
         case ClientMessageType.CHAT_COMPLETION:
           await this.handleChatCompletionMessage(connection, message as ChatCompletionMessage);
+          break;
+        
+        case ClientMessageType.TOOL_SELECTION:
+          await this.handleToolSelectionMessage(connection, message as ToolSelectionMessage);
           break;
         
         default:
@@ -327,26 +333,86 @@ export class ConnectionManager {
           debug(`Chat completion stream ended for connection ${connection.id}`);
         });
       } else {
-        // Handle non-streaming response
-        const result = await deepseekClient.createChatCompletion({
+        // Get available tools from MCP server
+        const tools = await mcpClient.formatToolsForDeepSeek();
+        
+        // Create chat completion with tools
+        const result = await deepseekClient.createChatCompletionWithTools({
           model,
           messages,
           temperature,
-          stream: false
+          stream: false,
+          tools
         });
         
         if (result.success) {
-          this.sendMessage(connection, {
-            type: ServerMessageType.CHAT_COMPLETION_RESULT,
-            id,
-            result: result.data
-          });
+          // Check if there are tool suggestions
+          if (result.toolSuggestions && result.toolSuggestions.length > 0) {
+            // Send tool suggestions
+            this.sendMessage(connection, {
+              type: ServerMessageType.TOOL_SUGGESTIONS,
+              id,
+              suggestions: result.toolSuggestions,
+              originalQuery: messages[messages.length - 1].content
+            } as ToolSuggestionsMessage);
+          } else {
+            // Send regular chat completion result
+            this.sendMessage(connection, {
+              type: ServerMessageType.CHAT_COMPLETION_RESULT,
+              id,
+              result: result.data
+            });
+          }
         } else {
           this.sendErrorMessage(connection, id, result.error || 'Chat completion failed');
         }
       }
     } catch (err: any) {
       error(`Error in chat completion for connection ${connection.id}`, { error: err });
+      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+    }
+  }
+
+  /**
+   * Handle a tool selection message
+   */
+  private async handleToolSelectionMessage(connection: ConnectionState, message: ToolSelectionMessage): Promise<void> {
+    const { id, toolName, arguments: args, originalMessageId } = message;
+    
+    // Check if authenticated
+    if (!connection.isAuthenticated) {
+      this.sendErrorMessage(connection, id, 'Not authenticated');
+      return;
+    }
+    
+    // Send status message
+    this.sendMessage(connection, {
+      type: ServerMessageType.STATUS,
+      id,
+      status: `Processing tool selection: ${toolName}`,
+    });
+    
+    try {
+      // Call the selected tool
+      const result = await mcpClient.callTool({
+        tool: toolName,
+        arguments: args,
+      });
+      
+      if (result.success) {
+        // Send tool result
+        this.sendMessage(connection, {
+          type: ServerMessageType.TOOL_RESULT,
+          id,
+          tool: toolName,
+          data: result.data,
+        });
+      } else {
+        // Send error message
+        this.sendErrorMessage(connection, id, result.error || 'Tool call failed');
+      }
+    } catch (err: any) {
+      error(`Error calling selected tool ${toolName} for connection ${connection.id}`, { error: err });
       this.sendErrorMessage(connection, id, err.message || 'Internal server error');
     }
   }
