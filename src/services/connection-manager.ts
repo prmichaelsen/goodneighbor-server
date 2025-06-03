@@ -11,15 +11,11 @@ import {
   ClientMessageType,
   ServerMessageType,
   AuthMessage,
-  ToolCallMessage,
   PingMessage,
-  ChatCompletionMessage,
-  ToolSelectionMessage,
-  ToolSuggestionsMessage
+  ChatCompletionMessage
 } from '../types/messages';
 import { SECURITY_CONFIG, WS_CONFIG, DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
-import { mcpClient } from './mcp-client';
 import { deepseekClient } from './deepseek-client';
 
 /**
@@ -83,8 +79,15 @@ export class ConnectionManager {
       this.removeConnection(connectionId);
     });
 
-    socket.on('error', (err) => {
-      error(`WebSocket error for connection ${connectionId}`, { error: err });
+    socket.on('error', (err: any) => {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
+      };
+      
+      error(`WebSocket error for connection ${connectionId}`, { error: safeError });
       this.removeConnection(connectionId);
     });
 
@@ -100,8 +103,15 @@ export class ConnectionManager {
     if (connection) {
       try {
         connection.socket.terminate();
-      } catch (err) {
-        error(`Error terminating connection ${connectionId}`, { error: err });
+      } catch (err: any) {
+        // Create a safe error object to avoid circular references
+        const safeError: Record<string, any> = {
+          message: err.message,
+          name: err.name,
+          stack: err.stack
+        };
+        
+        error(`Error terminating connection ${connectionId}`, { error: safeError });
       }
       
       this.connections.delete(connectionId);
@@ -140,10 +150,6 @@ export class ConnectionManager {
           await this.handleAuthMessage(connection, message as AuthMessage);
           break;
         
-        case ClientMessageType.TOOL_CALL:
-          await this.handleToolCallMessage(connection, message as ToolCallMessage);
-          break;
-        
         case ClientMessageType.PING:
           this.handlePingMessage(connection, message as PingMessage);
           break;
@@ -152,17 +158,20 @@ export class ConnectionManager {
           await this.handleChatCompletionMessage(connection, message as ChatCompletionMessage);
           break;
         
-        case ClientMessageType.TOOL_SELECTION:
-          await this.handleToolSelectionMessage(connection, message as ToolSelectionMessage);
-          break;
-        
         default:
           // Use type assertion for unknown message types
           const unknownMessage = message as {id: string; type: string};
           this.sendErrorMessage(connection, unknownMessage.id, `Unknown message type: ${unknownMessage.type}`);
       }
     } catch (err: any) {
-      error(`Error handling message for connection ${connectionId}`, { error: err });
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
+      };
+      
+      error(`Error handling message for connection ${connectionId}`, { error: safeError });
       
       try {
         // Try to send an error message
@@ -171,8 +180,15 @@ export class ConnectionManager {
           id: uuidv4(),
           error: 'Failed to process message: ' + (err.message || 'Unknown error'),
         }));
-      } catch (sendErr) {
-        error(`Failed to send error message to connection ${connectionId}`, { error: sendErr });
+      } catch (sendErr: any) {
+        // Create a safe error object for the send error
+        const safeSendError: Record<string, any> = {
+          message: sendErr.message,
+          name: sendErr.name,
+          stack: sendErr.stack
+        };
+        
+        error(`Failed to send error message to connection ${connectionId}`, { error: safeSendError });
       }
     }
   }
@@ -182,17 +198,6 @@ export class ConnectionManager {
    */
   private async handleAuthMessage(connection: ConnectionState, message: AuthMessage): Promise<void> {
     const { id, auth } = message;
-    
-    // Log the received API key and the expected API key
-    info('Auth attempt details', {
-      connectionId: connection.id,
-      receivedApiKey: auth.apiKey,
-      expectedApiKey: SECURITY_CONFIG.API_KEY,
-      receivedApiKeyLength: auth.apiKey ? auth.apiKey.length : 0,
-      expectedApiKeyLength: SECURITY_CONFIG.API_KEY ? SECURITY_CONFIG.API_KEY.length : 0,
-      receivedApiKeyType: typeof auth.apiKey,
-      expectedApiKeyType: typeof SECURITY_CONFIG.API_KEY
-    });
     
     // Trim both API keys to remove any whitespace or newline characters
     const receivedApiKey = auth.apiKey ? auth.apiKey.trim() : '';
@@ -228,50 +233,6 @@ export class ConnectionManager {
   }
 
   /**
-   * Handle a tool call message
-   */
-  private async handleToolCallMessage(connection: ConnectionState, message: ToolCallMessage): Promise<void> {
-    const { id, tool, arguments: args } = message;
-    
-    // Check if authenticated
-    if (!connection.isAuthenticated) {
-      this.sendErrorMessage(connection, id, 'Not authenticated');
-      return;
-    }
-    
-    // Send status message
-    this.sendMessage(connection, {
-      type: ServerMessageType.STATUS,
-      id,
-      status: `Processing tool call: ${tool}`,
-    });
-    
-    try {
-      // Call the MCP tool
-      const result = await mcpClient.callTool({
-        tool,
-        arguments: args,
-      });
-      
-      if (result.success) {
-        // Send tool result
-        this.sendMessage(connection, {
-          type: ServerMessageType.TOOL_RESULT,
-          id,
-          tool,
-          data: result.data,
-        });
-      } else {
-        // Send error message
-        this.sendErrorMessage(connection, id, result.error || 'Tool call failed');
-      }
-    } catch (err: any) {
-      error(`Error calling tool ${tool} for connection ${connection.id}`, { error: err });
-      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
-    }
-  }
-
-  /**
    * Handle a ping message
    */
   private handlePingMessage(connection: ConnectionState, message: PingMessage): void {
@@ -291,7 +252,7 @@ export class ConnectionManager {
    * Handle a chat completion message
    */
   private async handleChatCompletionMessage(connection: ConnectionState, message: ChatCompletionMessage): Promise<void> {
-    const { id, model, messages, stream, temperature } = message;
+    const { id, model, messages, temperature } = message;
     
     // Check if authenticated
     if (!connection.isAuthenticated) {
@@ -305,7 +266,6 @@ export class ConnectionManager {
       model: model || 'default',
       messageCount: messages.length,
       lastMessageLength: messages[messages.length - 1]?.content?.length || 0,
-      streaming: stream,
       temperature
     });
     
@@ -317,201 +277,84 @@ export class ConnectionManager {
     });
     
     try {
-      if (stream) {
-        debug(`Using streaming mode for chat completion (connection ${connection.id})`, {
-          messageId: id,
-          model
-        });
+      debug(`Using streaming mode for chat completion (connection ${connection.id})`, {
+        messageId: id,
+        model
+      });
+      
+      // Handle streaming response
+      const startTime = Date.now();
+      const streamEmitter = deepseekClient.createChatCompletionStream({
+        model,
+        messages,
+        temperature,
+        stream: true
+      });
+      
+      let chunkCount = 0;
+      
+      streamEmitter.on('data', (chunk) => {
+        chunkCount++;
         
-        // Handle streaming response
-        const startTime = Date.now();
-        const streamEmitter = deepseekClient.createChatCompletionStream({
-          model,
-          messages,
-          temperature,
-          stream: true
-        });
-        
-        let chunkCount = 0;
-        
-        streamEmitter.on('data', (chunk) => {
-          chunkCount++;
-          
-          // Log every 10th chunk to avoid excessive logging
-          if (chunkCount % 10 === 0) {
-            debug(`Received stream chunk ${chunkCount} for connection ${connection.id}`, {
-              messageId: id,
-              elapsedTime: `${Date.now() - startTime}ms`
-            });
-          }
-          
-          // Ensure the message follows the ChatCompletionChunkMessage interface
-          this.sendMessage(connection, {
-            type: ServerMessageType.CHAT_COMPLETION_CHUNK,
-            id,
-            chunk: {
-              id: chunk.id || id,
-              object: chunk.object || 'chat.completion.chunk',
-              created: chunk.created || Date.now(),
-              model: chunk.model || model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-              choices: chunk.choices || []
-            }
-          });
-        });
-        
-        streamEmitter.on('error', (err) => {
-          error(`Error in chat completion stream for connection ${connection.id}`, { 
-            error: err,
+        // Log every 10th chunk to avoid excessive logging
+        if (chunkCount % 10 === 0) {
+          debug(`Received stream chunk ${chunkCount} for connection ${connection.id}`, {
             messageId: id,
-            model,
             elapsedTime: `${Date.now() - startTime}ms`
           });
-          this.sendErrorMessage(connection, id, err.message || 'Streaming error');
-        });
-        
-        streamEmitter.on('end', () => {
-          info(`Chat completion stream ended for connection ${connection.id}`, {
-            messageId: id,
-            totalChunks: chunkCount,
-            totalTime: `${Date.now() - startTime}ms`
-          });
-        });
-      } else {
-        debug(`Using non-streaming mode for chat completion (connection ${connection.id})`, {
-          messageId: id,
-          model
-        });
-        
-        // Get available tools from MCP server
-        debug(`Fetching tools from MCP server for connection ${connection.id}`);
-        const toolsStartTime = Date.now();
-        const tools = await mcpClient.formatToolsForDeepSeek();
-        debug(`Fetched ${tools.length} tools from MCP server in ${Date.now() - toolsStartTime}ms`);
-        
-        // Create chat completion with tools
-        info(`Creating chat completion with tools for connection ${connection.id}`, {
-          messageId: id,
-          toolCount: tools.length
-        });
-        
-        const completionStartTime = Date.now();
-        const result = await deepseekClient.createChatCompletionWithTools({
-          model,
-          messages,
-          temperature,
-          stream: false,
-          tools
-        });
-        
-        const completionDuration = Date.now() - completionStartTime;
-        
-        if (result.success) {
-          info(`Chat completion successful for connection ${connection.id}`, {
-            messageId: id,
-            duration: `${completionDuration}ms`,
-            hasSuggestions: !!result.toolSuggestions && result.toolSuggestions.length > 0
-          });
-          
-          // Check if there are tool suggestions
-          if (result.toolSuggestions && result.toolSuggestions.length > 0) {
-            debug(`Sending ${result.toolSuggestions.length} tool suggestions to connection ${connection.id}`, {
-              messageId: id,
-              suggestions: result.toolSuggestions.map(s => s.tool)
-            });
-            
-            // Send tool suggestions
-            this.sendMessage(connection, {
-              type: ServerMessageType.TOOL_SUGGESTIONS,
-              id,
-              suggestions: result.toolSuggestions,
-              originalQuery: messages[messages.length - 1].content
-            } as ToolSuggestionsMessage);
-          } else {
-            debug(`Sending regular chat completion result to connection ${connection.id}`, {
-              messageId: id,
-              responseSize: JSON.stringify(result.data).length
-            });
-            
-            // Send regular chat completion result
-            // Ensure the message follows the ChatCompletionResultMessage interface
-            this.sendMessage(connection, {
-              type: ServerMessageType.CHAT_COMPLETION_RESULT,
-              id,
-              result: {
-                id: result.data.id || id,
-                object: result.data.object || 'chat.completion',
-                created: result.data.created || Date.now(),
-                model: result.data.model || model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-                choices: result.data.choices || [],
-                usage: result.data.usage || {
-                  prompt_tokens: 0,
-                  completion_tokens: 0,
-                  total_tokens: 0
-                }
-              }
-            });
-          }
-        } else {
-          error(`Chat completion failed for connection ${connection.id}`, {
-            messageId: id,
-            error: result.error,
-            details: result.details,
-            duration: `${completionDuration}ms`
-          });
-          
-          this.sendErrorMessage(connection, id, result.error || 'Chat completion failed');
         }
-      }
+        
+        // Ensure the message follows the ChatCompletionChunkMessage interface
+        this.sendMessage(connection, {
+          type: ServerMessageType.CHAT_COMPLETION_CHUNK,
+          id,
+          chunk: {
+            id: chunk.id || id,
+            object: chunk.object || 'chat.completion.chunk',
+            created: chunk.created || Date.now(),
+            model: chunk.model || model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+            choices: chunk.choices || []
+          }
+        });
+      });
+      
+      streamEmitter.on('error', (err) => {
+        // Create a safe error object to avoid circular references
+        const safeError: Record<string, any> = {
+          message: err.message,
+          name: err.name,
+          stack: err.stack
+        };
+        
+        error(`Error in chat completion stream for connection ${connection.id}`, { 
+          error: safeError,
+          messageId: id,
+          model,
+          elapsedTime: `${Date.now() - startTime}ms`
+        });
+        this.sendErrorMessage(connection, id, err.message || 'Streaming error');
+      });
+      
+      streamEmitter.on('end', () => {
+        info(`Chat completion stream ended for connection ${connection.id}`, {
+          messageId: id,
+          totalChunks: chunkCount,
+          totalTime: `${Date.now() - startTime}ms`
+        });
+      });
     } catch (err: any) {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
+      };
+      
       error(`Error in chat completion for connection ${connection.id}`, { 
-        error: err,
+        error: safeError,
         messageId: id,
         stack: err.stack
       });
-      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
-    }
-  }
-
-  /**
-   * Handle a tool selection message
-   */
-  private async handleToolSelectionMessage(connection: ConnectionState, message: ToolSelectionMessage): Promise<void> {
-    const { id, toolName, arguments: args, originalMessageId } = message;
-    
-    // Check if authenticated
-    if (!connection.isAuthenticated) {
-      this.sendErrorMessage(connection, id, 'Not authenticated');
-      return;
-    }
-    
-    // Send status message
-    this.sendMessage(connection, {
-      type: ServerMessageType.STATUS,
-      id,
-      status: `Processing tool selection: ${toolName}`,
-    });
-    
-    try {
-      // Call the selected tool
-      const result = await mcpClient.callTool({
-        tool: toolName,
-        arguments: args,
-      });
-      
-      if (result.success) {
-        // Send tool result
-        this.sendMessage(connection, {
-          type: ServerMessageType.TOOL_RESULT,
-          id,
-          tool: toolName,
-          data: result.data,
-        });
-      } else {
-        // Send error message
-        this.sendErrorMessage(connection, id, result.error || 'Tool call failed');
-      }
-    } catch (err: any) {
-      error(`Error calling selected tool ${toolName} for connection ${connection.id}`, { error: err });
       this.sendErrorMessage(connection, id, err.message || 'Internal server error');
     }
   }
@@ -528,12 +371,10 @@ export class ConnectionManager {
         (message as any).type = 'unknown';
       }
       
-      // Log the full message for debugging
-      debug(`Sending message to connection ${connection.id}`, { 
-        message: JSON.stringify(message)
-      });
+      // Try to stringify the message to check for circular references
+      const messageString = JSON.stringify(message);
       
-      connection.socket.send(JSON.stringify(message));
+      connection.socket.send(messageString);
       
       // Use type assertion to avoid TypeScript errors
       const typedMessage = message as {type: string; id: string};
@@ -541,8 +382,15 @@ export class ConnectionManager {
         type: typedMessage.type,
         id: typedMessage.id,
       });
-    } catch (err) {
-      error(`Failed to send message to connection ${connection.id}`, { error: err });
+    } catch (err: any) {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
+      };
+      
+      error(`Failed to send message to connection ${connection.id}`, { error: safeError });
       
       // If we can't send a message, the connection might be dead
       this.removeConnection(connection.id);
@@ -553,11 +401,34 @@ export class ConnectionManager {
    * Send an error message to a connection
    */
   private sendErrorMessage(connection: ConnectionState, correlationId: string, errorMessage: string): void {
-    this.sendMessage(connection, {
-      type: ServerMessageType.ERROR,
-      id: correlationId,
-      error: errorMessage,
-    });
+    try {
+      // Make sure the error message doesn't contain circular references
+      // Try to stringify it to check for circular references
+      JSON.stringify(errorMessage);
+      
+      this.sendMessage(connection, {
+        type: ServerMessageType.ERROR,
+        id: correlationId,
+        error: errorMessage,
+      });
+    } catch (err: any) {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        name: err.name,
+        stack: err.stack
+      };
+      
+      // If we get an error trying to stringify the error message,
+      // it likely contains circular references, so send a simplified version
+      error(`Error message contains circular references: ${errorMessage}`, { error: safeError });
+      
+      this.sendMessage(connection, {
+        type: ServerMessageType.ERROR,
+        id: correlationId,
+        error: 'Internal server error: Error processing request',
+      });
+    }
   }
 
   /**
@@ -581,8 +452,15 @@ export class ConnectionManager {
           connection.socket.ping();
           connection.pendingPong = true;
           debug(`Sent ping to connection ${connectionId}`);
-        } catch (err) {
-          error(`Failed to send ping to connection ${connectionId}`, { error: err });
+        } catch (err: any) {
+          // Create a safe error object to avoid circular references
+          const safeError: Record<string, any> = {
+            message: err.message,
+            name: err.name,
+            stack: err.stack
+          };
+          
+          error(`Failed to send ping to connection ${connectionId}`, { error: safeError });
           this.removeConnection(connectionId);
         }
       }

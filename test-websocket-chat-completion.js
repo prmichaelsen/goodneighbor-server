@@ -2,13 +2,10 @@
  * Test WebSocket client for chat completion
  * 
  * This script connects to the WebSocket server, authenticates, and sends a chat completion request.
- * It supports both streaming and non-streaming completions.
+ * The server always uses streaming mode for completions.
  * 
  * Usage:
- * node test-websocket-chat-completion.js [--stream]
- * 
- * Options:
- * --stream: Use streaming mode (default: false)
+ * node test-websocket-chat-completion.js
  */
 
 const WebSocket = require('ws');
@@ -19,12 +16,10 @@ const { v4: uuidv4 } = require('uuid');
 dotenv.config();
 
 // Configuration
-const WS_URL = `wss://goodneighbor-server-868795766038.us-central1.run.app/ws`;
+const WS_URL = `ws://localhost:4000/ws`;
 const API_KEY = process.env.CLIENT_AUTH_API_KEY || 'feb4a497786cbcfb0627bd71f3c1299c';
 
-// Check if streaming mode is enabled
-const useStreaming = process.argv.includes('--stream');
-console.log(`Using ${useStreaming ? 'streaming' : 'non-streaming'} mode`);
+console.log('Connecting to WebSocket server for streaming chat completion...');
 
 // Create WebSocket connection
 const ws = new WebSocket(WS_URL);
@@ -65,10 +60,6 @@ ws.on('message', (data) => {
       
       case 'chat_completion_chunk':
         handleChatCompletionChunk(message);
-        break;
-      
-      case 'chat_completion_result':
-        handleChatCompletionResult(message);
         break;
       
       case 'status':
@@ -115,21 +106,15 @@ function handleChatCompletionChunk(message) {
   if (choice && choice.delta && choice.delta.content) {
     process.stdout.write(choice.delta.content);
   }
-}
-
-// Handle chat completion result (non-streaming)
-function handleChatCompletionResult(message) {
-  const result = message.result;
-  const choice = result.choices[0];
   
-  console.log('\nChat Completion Result:');
-  console.log('------------------------');
-  console.log(choice.message.content);
-  console.log('------------------------');
-  console.log('Usage:', result.usage);
-  
-  // Close the connection after receiving the result
-  ws.close();
+  // Check if this is the last chunk (finish_reason is not null)
+  if (choice && choice.finish_reason !== null) {
+    console.log('\n\nCompletion finished.');
+    // Close the connection after receiving the final chunk
+    setTimeout(() => {
+      ws.close();
+    }, 1000);
+  }
 }
 
 // Send chat completion request
@@ -142,7 +127,6 @@ function sendChatCompletionRequest() {
       { role: 'system', content: 'You are a helpful assistant.' },
       { role: 'user', content: 'Tell me a short joke about programming.' }
     ],
-    stream: useStreaming,
     temperature: 0.7
   };
   

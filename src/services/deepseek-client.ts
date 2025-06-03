@@ -126,11 +126,14 @@ export class DeepSeekClient {
       });
       return config;
     }, (err) => {
-      error('Error creating DeepSeek API request', {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
         message: err.message,
         stack: err.stack,
         code: err.code
-      });
+      };
+      
+      error('Error creating DeepSeek API request', safeError);
       return Promise.reject(err);
     });
 
@@ -148,7 +151,7 @@ export class DeepSeekClient {
       },
       (err) => {
         // Detailed error logging
-        const errorContext: any = {
+        const errorContext: Record<string, any> = {
           message: err.message,
           code: err.code,
           stack: err.stack,
@@ -157,32 +160,53 @@ export class DeepSeekClient {
 
         // Add config if available
         if (err.config) {
-          errorContext.config = {
-            method: err.config.method,
-            url: err.config.url,
-            baseURL: err.config.baseURL,
-            timeout: err.config.timeout
-          };
+          try {
+            errorContext.config = {
+              method: err.config.method,
+              url: err.config.url,
+              baseURL: err.config.baseURL,
+              timeout: err.config.timeout
+            };
+          } catch (e) {
+            errorContext.config = 'Error extracting config: possible circular reference';
+          }
         } else {
           errorContext.config = 'No config available';
         }
 
         // Add response data if available
         if (err.response) {
-          errorContext.response = {
-            status: err.response.status,
-            statusText: err.response.statusText,
-            headers: err.response.headers,
-            data: err.response.data
-          };
+          try {
+            // Test if response data can be stringified
+            const testData = err.response.data ? JSON.stringify(err.response.data) : null;
+            
+            errorContext.response = {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              headers: err.response.headers,
+              data: err.response.data
+            };
+          } catch (e) {
+            // If stringification fails, provide a safe version
+            errorContext.response = {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              headers: err.response.headers,
+              data: '[Circular data structure - cannot be stringified]'
+            };
+          }
         } else if (err.request) {
           // The request was made but no response was received
-          errorContext.request = {
-            method: err.request.method,
-            path: err.request.path,
-            host: err.request.host,
-            protocol: err.request.protocol
-          };
+          try {
+            errorContext.request = {
+              method: err.request.method,
+              path: err.request.path,
+              host: err.request.host,
+              protocol: err.request.protocol
+            };
+          } catch (e) {
+            errorContext.request = 'Error extracting request: possible circular reference';
+          }
         }
 
         error('Error in DeepSeek API response', errorContext);
@@ -217,9 +241,27 @@ export class DeepSeekClient {
         data: response.data,
       };
     } catch (err: any) {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        code: err.code
+      };
+      
+      // Safely extract response data if available
+      let responseData = 'Unknown error';
+      if (err.response && err.response.data) {
+        try {
+          // Test if response data can be stringified
+          JSON.stringify(err.response.data);
+          responseData = err.response.data;
+        } catch (e) {
+          responseData = '[Circular data structure - cannot be stringified]';
+        }
+      }
+      
       error(`Failed to create DeepSeek chat completion`, {
-        error: err.message,
-        response: err.response?.data,
+        error: safeError,
+        response: responseData,
       });
 
       return {
@@ -236,6 +278,14 @@ export class DeepSeekClient {
    */
   createChatCompletionStream(params: DeepSeekChatCompletionParams): EventEmitter {
     const emitter = new EventEmitter();
+    
+    // Log the request parameters
+    info('Creating DeepSeek streaming chat completion', {
+      model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+      messageCount: params.messages.length,
+      temperature: params.temperature,
+      stream: true
+    });
     
     // Make the request
     this.client({
@@ -254,34 +304,167 @@ export class DeepSeekClient {
       responseType: 'stream'
     })
     .then(response => {
-      let buffer = '';
-      
-      response.data.on('data', (chunk: Buffer) => {
-        const chunkStr = chunk.toString();
-        buffer += chunkStr;
+      try {
+        let buffer = '';
         
-        // Process any complete SSE messages in the buffer
-        let processedBuffer = this.processSSEChunk(buffer, emitter);
-        buffer = processedBuffer;
-      });
-      
-      response.data.on('end', () => {
-        // Process any remaining data in the buffer
-        if (buffer.trim().length > 0) {
-          this.processSSEChunk(buffer, emitter, true);
-        }
+        // Create a safe response object for logging
+        const safeResponse = {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+          hasData: !!response.data
+        };
         
-        emitter.emit('end');
-      });
-      
-      response.data.on('error', (err: Error) => {
-        error('Error in DeepSeek streaming response', { error: err });
-        emitter.emit('error', err);
-      });
+        debug('Received streaming response from DeepSeek API', safeResponse);
+        
+        response.data.on('data', (chunk: Buffer) => {
+          try {
+            const chunkStr = chunk.toString();
+            buffer += chunkStr;
+            
+            // Process any complete SSE messages in the buffer
+            let processedBuffer = this.processSSEChunk(buffer, emitter);
+            buffer = processedBuffer;
+          } catch (err: any) {
+            // Create a safe error object to avoid circular references
+            const safeError: Record<string, any> = {
+              message: err.message,
+              name: err.name,
+              stack: err.stack
+            };
+            error('Error processing stream chunk', { error: safeError });
+            emitter.emit('error', new Error('Error processing stream data: ' + err.message));
+          }
+        });
+        
+        response.data.on('end', () => {
+          try {
+            // Process any remaining data in the buffer
+            if (buffer.trim().length > 0) {
+              this.processSSEChunk(buffer, emitter, true);
+            }
+            
+            debug('Stream ended successfully');
+            emitter.emit('end');
+          } catch (err: any) {
+            // Create a safe error object to avoid circular references
+            const safeError: Record<string, any> = {
+              message: err.message,
+              name: err.name,
+              stack: err.stack
+            };
+            error('Error processing final stream chunk', { error: safeError });
+            emitter.emit('error', new Error('Error processing final stream data: ' + err.message));
+          }
+        });
+        
+        response.data.on('error', (err: Error) => {
+          // Extract only necessary information to avoid circular references
+          const safeError: Record<string, any> = {
+            message: err.message,
+            name: err.name,
+            stack: err.stack
+          };
+          error('Error in DeepSeek streaming response', { error: safeError });
+          emitter.emit('error', new Error('Stream error: ' + err.message));
+        });
+      } catch (err: any) {
+        // Handle any errors in the response handling itself
+        const safeError: Record<string, any> = {
+          message: err.message,
+          name: err.name,
+          stack: err.stack
+        };
+        error('Error handling streaming response', { error: safeError });
+        emitter.emit('error', new Error('Error handling streaming response: ' + err.message));
+      }
     })
     .catch(err => {
-      error('Failed to create DeepSeek streaming request', { error: err });
-      emitter.emit('error', err);
+      try {
+        // Extract only necessary information to avoid circular references
+        const safeError: Record<string, any> = {
+          message: err.message,
+          name: err.name,
+          code: err.code,
+          isAxiosError: err.isAxiosError
+        };
+        
+        // Add response status and data if available, but avoid circular references
+        if (err.response) {
+          safeError.responseStatus = err.response.status;
+          safeError.responseStatusText = err.response.statusText;
+          
+          // Safely extract headers
+          try {
+            if (err.response.headers) {
+              safeError.responseHeaders = { ...err.response.headers };
+            }
+          } catch (e) {
+            safeError.responseHeaders = '[Could not extract headers]';
+          }
+          
+          // Safely extract data
+          if (err.response.data) {
+            try {
+              // Only include response data if it can be safely stringified
+              JSON.stringify(err.response.data);
+              safeError.responseData = err.response.data;
+            } catch (e) {
+              safeError.responseData = '[Circular data structure - cannot be stringified]';
+            }
+          }
+        }
+        
+        // Safely extract request information
+        if (err.request) {
+          try {
+            safeError.request = {
+              method: err.request.method,
+              path: err.request.path,
+              host: err.request.host
+            };
+          } catch (e) {
+            safeError.request = '[Could not extract request details]';
+          }
+        }
+        
+        // Safely extract config information
+        if (err.config) {
+          try {
+            safeError.config = {
+              url: err.config.url,
+              method: err.config.method,
+              baseURL: err.config.baseURL,
+              timeout: err.config.timeout
+            };
+          } catch (e) {
+            safeError.config = '[Could not extract config details]';
+          }
+        }
+        
+        error('Failed to create DeepSeek streaming request', { error: safeError });
+        
+        // Create a simplified error message for the client
+        let errorMessage = 'Failed to create streaming request';
+        if (err.message) {
+          // Remove any sensitive or circular reference information
+          errorMessage = err.message.replace(/Bearer [^\s]+/g, 'Bearer [REDACTED]');
+          
+          // Limit the length of the error message
+          if (errorMessage.length > 200) {
+            errorMessage = errorMessage.substring(0, 200) + '...';
+          }
+        }
+        
+        emitter.emit('error', new Error(errorMessage));
+      } catch (handlingErr: any) {
+        // If we get an error while handling the error, use a generic message
+        error('Error while handling streaming request error', { 
+          message: handlingErr.message,
+          originalError: err.message || 'Unknown error'
+        });
+        emitter.emit('error', new Error('Internal server error processing streaming request'));
+      }
     });
     
     return emitter;
@@ -312,8 +495,14 @@ export class DeepSeekClient {
         try {
           const parsedData = JSON.parse(data);
           emitter.emit('data', parsedData);
-        } catch (err) {
-          error('Error parsing SSE data', { error: err, data });
+        } catch (err: any) {
+          // Create a safe error object to avoid circular references
+          const safeError: Record<string, any> = {
+            message: err.message,
+            name: err.name,
+            stack: err.stack
+          };
+          error('Error parsing SSE data', { error: safeError, data });
         }
       }
     }
@@ -385,9 +574,27 @@ export class DeepSeekClient {
         };
       }
     } catch (err: any) {
+      // Create a safe error object to avoid circular references
+      const safeError: Record<string, any> = {
+        message: err.message,
+        code: err.code
+      };
+      
+      // Safely extract response data if available
+      let responseData = 'Unknown error';
+      if (err.response && err.response.data) {
+        try {
+          // Test if response data can be stringified
+          JSON.stringify(err.response.data);
+          responseData = err.response.data;
+        } catch (e) {
+          responseData = '[Circular data structure - cannot be stringified]';
+        }
+      }
+      
       error(`Failed to create DeepSeek chat completion with tools`, {
-        error: err.message,
-        response: err.response?.data,
+        error: safeError,
+        response: responseData,
       });
 
       return {
@@ -580,7 +787,7 @@ export class DeepSeekClient {
         const durationStr = typeof duration === 'number' ? `${duration}ms` : duration;
         
         // Detailed error logging
-        const errorContext: any = { 
+        const errorContext: Record<string, any> = { 
           attempt,
           error: err.message,
           code: err.code,
@@ -591,20 +798,36 @@ export class DeepSeekClient {
         
         // Add response data if available
         if (err.response) {
-          errorContext.response = {
-            status: err.response.status,
-            statusText: err.response.statusText,
-            data: err.response.data
-          };
+          try {
+            // Test if response data can be stringified
+            const testData = err.response.data ? JSON.stringify(err.response.data) : null;
+            
+            errorContext.response = {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              data: err.response.data
+            };
+          } catch (e) {
+            // If stringification fails, provide a safe version
+            errorContext.response = {
+              status: err.response.status,
+              statusText: err.response.statusText,
+              data: '[Circular data structure - cannot be stringified]'
+            };
+          }
         }
         
         // Add request data if available
         if (err.config) {
-          errorContext.request = {
-            url: `${err.config.baseURL}${err.config.url}`,
-            method: err.config.method,
-            timeout: err.config.timeout
-          };
+          try {
+            errorContext.request = {
+              url: `${err.config.baseURL}${err.config.url}`,
+              method: err.config.method,
+              timeout: err.config.timeout
+            };
+          } catch (e) {
+            errorContext.request = 'Error extracting request: possible circular reference';
+          }
         }
         
         // Add more detailed error information
