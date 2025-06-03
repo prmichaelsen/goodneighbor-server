@@ -16,8 +16,8 @@ const { v4: uuidv4 } = require('uuid');
 dotenv.config();
 
 // Configuration
-const WS_URL = `ws://localhost:${process.env.PORT || 3000}${process.env.WS_PATH || '/ws'}`;
-const API_KEY = process.env.CLIENT_AUTH_API_KEY;
+const WS_URL = `wss://goodneighbor-server-868795766038.us-central1.run.app/ws`;
+const API_KEY = process.env.CLIENT_AUTH_API_KEY || 'feb4a497786cbcfb0627bd71f3c1299c';
 
 // Create WebSocket connection
 const ws = new WebSocket(WS_URL);

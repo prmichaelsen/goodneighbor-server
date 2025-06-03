@@ -17,7 +17,7 @@ import {
   ToolSelectionMessage,
   ToolSuggestionsMessage
 } from '../types/messages';
-import { SECURITY_CONFIG, WS_CONFIG } from '../config';
+import { SECURITY_CONFIG, WS_CONFIG, DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
 import { mcpClient } from './mcp-client';
 import { deepseekClient } from './deepseek-client';
@@ -345,10 +345,17 @@ export class ConnectionManager {
             });
           }
           
+          // Ensure the message follows the ChatCompletionChunkMessage interface
           this.sendMessage(connection, {
             type: ServerMessageType.CHAT_COMPLETION_CHUNK,
             id,
-            chunk
+            chunk: {
+              id: chunk.id || id,
+              object: chunk.object || 'chat.completion.chunk',
+              created: chunk.created || Date.now(),
+              model: chunk.model || model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+              choices: chunk.choices || []
+            }
           });
         });
         
@@ -426,10 +433,22 @@ export class ConnectionManager {
             });
             
             // Send regular chat completion result
+            // Ensure the message follows the ChatCompletionResultMessage interface
             this.sendMessage(connection, {
               type: ServerMessageType.CHAT_COMPLETION_RESULT,
               id,
-              result: result.data
+              result: {
+                id: result.data.id || id,
+                object: result.data.object || 'chat.completion',
+                created: result.data.created || Date.now(),
+                model: result.data.model || model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+                choices: result.data.choices || [],
+                usage: result.data.usage || {
+                  prompt_tokens: 0,
+                  completion_tokens: 0,
+                  total_tokens: 0
+                }
+              }
             });
           }
         } else {
@@ -502,6 +521,18 @@ export class ConnectionManager {
    */
   private sendMessage(connection: ConnectionState, message: ServerMessage): void {
     try {
+      // Ensure the type property is included in the message
+      if (!message.type) {
+        error(`Message missing type property for connection ${connection.id}`, { message });
+        // Add a default type if missing
+        (message as any).type = 'unknown';
+      }
+      
+      // Log the full message for debugging
+      debug(`Sending message to connection ${connection.id}`, { 
+        message: JSON.stringify(message)
+      });
+      
       connection.socket.send(JSON.stringify(message));
       
       // Use type assertion to avoid TypeScript errors
