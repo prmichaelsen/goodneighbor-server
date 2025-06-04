@@ -77,6 +77,50 @@ export class AlgoliaSearchService {
     try {
       info(`Converting natural language query to Algolia parameters: "${query}"`);
       
+      // Define relationship patterns with descriptive verbs
+      const relationshipPatterns = [
+        { 
+          relation: 'refs.hasOwner', 
+          verb: 'created/owned by',
+          keywords: ['by', 'from', 'created by', 'written by', 'posted by', 'authored by', 'owned by', 'creator', 'author', 'owner']
+        },
+        { 
+          relation: 'refs.hasSubject', 
+          verb: 'about',
+          keywords: ['about', 'regarding', 'concerning', 'on the topic of', 'related to', 'subject']
+        },
+        { 
+          relation: 'refs.isInGroup', 
+          verb: 'in',
+          keywords: ['in group', 'in the group', 'in community', 'in the community', 'from group', 'from the group']
+        },
+        { 
+          relation: 'refs.hasFollower', 
+          verb: 'followed by',
+          keywords: ['followed by', 'subscribed to by', 'subscriber']
+        },
+        { 
+          relation: 'refs.hasModerator', 
+          verb: 'moderated by',
+          keywords: ['moderated by', 'curated by', 'managed by', 'administered by', 'moderator']
+        }
+      ];
+      
+      // Generate relationship mapping section for the system prompt
+      const relationshipMappingSection = relationshipPatterns.map((pattern, index) => {
+        return `   - For content ${pattern.verb} a user: use "${pattern.relation}:<username>"`;
+      }).join('\n');
+      
+      // Generate relationship examples for the system prompt
+      const relationshipExamples = [
+        `"comments by John" → { "query": "", "filters": "type:comment AND refs.hasOwner:John" }`,
+        `"posts created by Sarah" → { "query": "", "filters": "type:post AND refs.hasOwner:Sarah" }`,
+        `"content owned by @username" → { "query": "", "filters": "refs.hasOwner:@username" }`,
+        `"reviews about @username" → { "query": "", "filters": "type:review AND refs.hasSubject:@username" }`,
+        `"posts moderated by @admin" → { "query": "", "filters": "type:post AND refs.hasModerator:@admin" }`,
+        `"content in @phoenix.az.us group" → { "query": "", "filters": "refs.isInGroup:@phoenix.az.us" }`
+      ];
+      
       // Create a system prompt that explains how to convert natural language to Algolia parameters
       const systemPrompt = `
 You are an expert in converting natural language search queries into Algolia search parameters.
@@ -94,12 +138,14 @@ Follow these guidelines:
 4. Set up highlighting and snippeting if relevant
 5. Configure geo-search parameters if location is mentioned
 6. Add any other relevant Algolia parameters
+7. For queries about authors, creators, owners, etc., use the refs-based filters:
+${relationshipMappingSection}
 
 Example conversions:
 - "cat posts" → { "query": "cat", "filters": "type:post" }
 - "posts about cats" → { "query": "cats", "filters": "type:post" }
 - "recent posts about safety" → { "query": "safety", "filters": "type:post", "numericFilters": ["createdAt>timestamp_for_recent_date"] }
-- "comments by John" → { "query": "", "filters": "type:comment AND author:John" }
+- ${relationshipExamples.join('\n- ')}
 - "events in Phoenix" → { "query": "", "filters": "type:event AND location:Phoenix" }
 - "safety tips" → { "query": "safety tips", "filters": "type:post" }
 - "users named Sarah" → { "query": "Sarah", "filters": "type:user" }
@@ -308,7 +354,8 @@ For geo-search, convert location names to coordinates if possible, or use placeh
       { type: 'comment', keywords: ['comment', 'comments', 'reply', 'replies', 'response', 'responses'] },
       { type: 'user', keywords: ['user', 'users', 'person', 'people', 'member', 'members', 'profile', 'profiles'] },
       { type: 'event', keywords: ['event', 'events', 'meetup', 'meetups', 'gathering', 'gatherings'] },
-      { type: 'group', keywords: ['group', 'groups', 'community', 'communities', 'club', 'clubs'] }
+      { type: 'group', keywords: ['group', 'groups', 'community', 'communities', 'club', 'clubs'] },
+      { type: 'review', keywords: ['review', 'reviews', 'rating', 'ratings', 'feedback'] }
     ];
     
     // If no filters are set, try to detect content type from the query
