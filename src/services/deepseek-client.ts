@@ -9,6 +9,34 @@ import { DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
 
 /**
+ * DeepSeek Preset Types
+ */
+export enum DeepSeekPreset {
+  DEFAULT = 'default',
+  LOW_LATENCY = 'low_latency',
+  HIGH_QUALITY = 'high_quality',
+  TOOL_SUGGESTION = 'tool_suggestion',
+  CUSTOM = 'custom'
+}
+
+/**
+ * DeepSeek Options Interface
+ */
+export interface DeepSeekOptions {
+  preset?: DeepSeekPreset;
+  timeout?: number;
+  maxTokens?: number;
+  temperature?: number;
+  model?: string;
+  keepAlive?: boolean;
+  systemPrompt?: string;
+  truncateUserMessage?: boolean;
+  maxUserMessageLength?: number;
+  retryStrategy?: 'none' | 'once' | 'exponential';
+  prioritizePatternMatching?: boolean;
+}
+
+/**
  * DeepSeek Chat Completion Parameters
  */
 export interface DeepSeekChatCompletionParams {
@@ -76,6 +104,64 @@ export interface DeepSeekChatCompletionResult {
   details?: string;
   toolSuggestions?: ToolSuggestion[];
 }
+
+/**
+ * Preset configurations
+ */
+const PRESET_CONFIGS: Record<DeepSeekPreset, Partial<DeepSeekOptions>> = {
+  [DeepSeekPreset.DEFAULT]: {
+    timeout: 60000,
+    maxTokens: undefined, // Use API default
+    temperature: 0.7,
+    keepAlive: true,
+    truncateUserMessage: false,
+    retryStrategy: 'once'
+  },
+  
+  [DeepSeekPreset.LOW_LATENCY]: {
+    timeout: 3000,
+    maxTokens: 10,
+    temperature: 0.0,
+    model: 'deepseek-chat', // Could use a lighter model if available
+    keepAlive: true,
+    truncateUserMessage: true,
+    maxUserMessageLength: 100,
+    retryStrategy: 'none',
+    prioritizePatternMatching: true
+  },
+  
+  [DeepSeekPreset.HIGH_QUALITY]: {
+    timeout: 90000,
+    maxTokens: 1000,
+    temperature: 0.8,
+    keepAlive: true,
+    truncateUserMessage: false,
+    retryStrategy: 'exponential'
+  },
+  
+  [DeepSeekPreset.TOOL_SUGGESTION]: {
+    timeout: 5000,
+    maxTokens: 50,
+    temperature: 0.2,
+    keepAlive: true,
+    truncateUserMessage: true,
+    maxUserMessageLength: 200,
+    retryStrategy: 'once',
+    prioritizePatternMatching: true,
+    systemPrompt: `You are a tool selection assistant. Your task is to analyze the user's query and determine which tool would be most appropriate to use.
+
+For each tool, provide:
+1. The tool name
+2. A confidence score between 0 and 1 (where 1 is 100% confidence)
+3. Suggested arguments for the tool
+
+IMPORTANT: Only assign a confidence score >= 0.9 if you are VERY certain that the tool is the correct one to use for the query. A confidence score of 0.9 or higher will result in automatic execution without user confirmation.`
+  },
+  
+  [DeepSeekPreset.CUSTOM]: {
+    // Empty - will use provided options
+  }
+};
 
 /**
  * DeepSeek Client for communicating with the DeepSeek API
@@ -192,24 +278,100 @@ export class DeepSeekClient {
   }
 
   /**
+   * Apply preset options to the provided options
+   */
+  private applyPresetOptions(options?: DeepSeekOptions): DeepSeekOptions {
+    // Default to DEFAULT preset if none specified
+    const preset = options?.preset || DeepSeekPreset.DEFAULT;
+    
+    // Get preset configuration
+    const presetConfig = PRESET_CONFIGS[preset];
+    
+    // Merge preset with provided options (provided options take precedence)
+    return {
+      ...presetConfig,
+      ...options,
+      preset // Ensure preset is included in result
+    };
+  }
+
+  /**
+   * Process messages based on options
+   */
+  private processMessages(
+    messages: Array<{role: string; content: string}>,
+    options: DeepSeekOptions
+  ): Array<{role: string; content: string}> {
+    let processedMessages = [...messages];
+    
+    // Truncate user message if needed
+    if (options.truncateUserMessage && options.maxUserMessageLength) {
+      processedMessages = processedMessages.map(msg => {
+        if (msg.role === 'user' && msg.content.length > options.maxUserMessageLength!) {
+          return {
+            ...msg,
+            content: msg.content.substring(0, options.maxUserMessageLength)
+          };
+        }
+        return msg;
+      });
+    }
+    
+    // Add custom system prompt if provided
+    if (options.systemPrompt) {
+      // Replace existing system message or add new one
+      const hasSystemMsg = processedMessages.some(msg => msg.role === 'system');
+      if (hasSystemMsg) {
+        processedMessages = processedMessages.map(msg => {
+          if (msg.role === 'system') {
+            return { ...msg, content: options.systemPrompt! };
+          }
+          return msg;
+        });
+      } else {
+        processedMessages = [
+          { role: 'system', content: options.systemPrompt },
+          ...processedMessages
+        ];
+      }
+    }
+    
+    return processedMessages;
+  }
+
+  /**
    * Create a chat completion (non-streaming)
    */
-  async createChatCompletion(params: DeepSeekChatCompletionParams): Promise<DeepSeekChatCompletionResult> {
+  async createChatCompletion(
+    params: DeepSeekChatCompletionParams,
+    options?: DeepSeekOptions
+  ): Promise<DeepSeekChatCompletionResult> {
     try {
+      // Apply preset options
+      const appliedOptions = this.applyPresetOptions(options);
+      
       info(`Creating DeepSeek chat completion`, {
-        model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+        model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
         messages: params.messages,
+        preset: appliedOptions.preset,
       });
 
+      // Process messages based on options
+      const processedMessages = this.processMessages(params.messages, appliedOptions);
+      
       const response = await this.client.post('/chat/completions', {
-        model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-        messages: params.messages,
+        model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+        messages: processedMessages,
         stream: false,
-        temperature: params.temperature !== undefined ? params.temperature : 0.7,
-        max_tokens: params.max_tokens,
+        temperature: appliedOptions.temperature !== undefined ? 
+          appliedOptions.temperature : 
+          (params.temperature !== undefined ? params.temperature : 0.7),
+        max_tokens: appliedOptions.maxTokens || params.max_tokens,
         top_p: params.top_p,
         frequency_penalty: params.frequency_penalty,
         presence_penalty: params.presence_penalty
+      }, {
+        timeout: appliedOptions.timeout || DEEPSEEK_CONFIG.TIMEOUT
       });
 
       return {
@@ -221,6 +383,44 @@ export class DeepSeekClient {
         error: err.message,
         response: err.response?.data,
       });
+
+      // Handle retry strategy if configured
+      if (options?.retryStrategy === 'once') {
+        try {
+          info(`Retrying DeepSeek chat completion (single retry)`);
+          
+          // Apply preset options
+          const appliedOptions = this.applyPresetOptions(options);
+          
+          // Process messages based on options
+          const processedMessages = this.processMessages(params.messages, appliedOptions);
+          
+          const response = await this.client.post('/chat/completions', {
+            model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+            messages: processedMessages,
+            stream: false,
+            temperature: appliedOptions.temperature !== undefined ? 
+              appliedOptions.temperature : 
+              (params.temperature !== undefined ? params.temperature : 0.7),
+            max_tokens: appliedOptions.maxTokens || params.max_tokens,
+            top_p: params.top_p,
+            frequency_penalty: params.frequency_penalty,
+            presence_penalty: params.presence_penalty
+          }, {
+            timeout: appliedOptions.timeout || DEEPSEEK_CONFIG.TIMEOUT
+          });
+
+          return {
+            success: true,
+            data: response.data,
+          };
+        } catch (retryErr: any) {
+          error(`Retry failed for DeepSeek chat completion`, {
+            error: retryErr.message,
+            response: retryErr.response?.data,
+          });
+        }
+      }
 
       return {
         success: false,
@@ -234,24 +434,36 @@ export class DeepSeekClient {
    * Create a streaming chat completion
    * Returns an EventEmitter that emits 'data', 'end', and 'error' events
    */
-  createChatCompletionStream(params: DeepSeekChatCompletionParams): EventEmitter {
+  createChatCompletionStream(
+    params: DeepSeekChatCompletionParams,
+    options?: DeepSeekOptions
+  ): EventEmitter {
     const emitter = new EventEmitter();
+    
+    // Apply preset options
+    const appliedOptions = this.applyPresetOptions(options);
+    
+    // Process messages based on options
+    const processedMessages = this.processMessages(params.messages, appliedOptions);
     
     // Make the request
     this.client({
       method: 'post',
       url: '/chat/completions',
       data: {
-        model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-        messages: params.messages,
+        model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+        messages: processedMessages,
         stream: true,
-        temperature: params.temperature !== undefined ? params.temperature : 0.7,
-        max_tokens: params.max_tokens,
+        temperature: appliedOptions.temperature !== undefined ? 
+          appliedOptions.temperature : 
+          (params.temperature !== undefined ? params.temperature : 0.7),
+        max_tokens: appliedOptions.maxTokens || params.max_tokens,
         top_p: params.top_p,
         frequency_penalty: params.frequency_penalty,
         presence_penalty: params.presence_penalty
       },
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: appliedOptions.timeout || DEEPSEEK_CONFIG.TIMEOUT
     })
     .then(response => {
       let buffer = '';
@@ -325,20 +537,35 @@ export class DeepSeekClient {
   /**
    * Create a chat completion with tools (non-streaming)
    */
-  async createChatCompletionWithTools(params: DeepSeekChatCompletionWithToolsParams): Promise<DeepSeekChatCompletionResult> {
+  async createChatCompletionWithTools(
+    params: DeepSeekChatCompletionWithToolsParams,
+    options?: DeepSeekOptions
+  ): Promise<DeepSeekChatCompletionResult> {
     try {
+      // Default to TOOL_SUGGESTION preset if none specified
+      const defaultOptions: DeepSeekOptions = {
+        preset: DeepSeekPreset.TOOL_SUGGESTION
+      };
+      
+      // Apply preset options
+      const appliedOptions = this.applyPresetOptions(options || defaultOptions);
+      
       info(`Creating DeepSeek chat completion with tools`, {
-        model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+        model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
         messages: params.messages,
         toolCount: params.tools.length,
+        preset: appliedOptions.preset
       });
 
       // Log the tools being sent to DeepSeek for debugging
       debug('Tools being sent to DeepSeek:', JSON.stringify(params.tools, null, 2));
 
+      // Process messages based on options
+      const processedMessages = this.processMessages(params.messages, appliedOptions);
+      
       // For now, since we're simulating the tool suggestion functionality,
       // we'll analyze the user's message to determine if any tools are relevant
-      const userMessage = params.messages[params.messages.length - 1].content.toLowerCase();
+      const userMessage = processedMessages[processedMessages.length - 1].content.toLowerCase();
       
       // Check if the message contains keywords related to available tools
       const toolSuggestions = this.analyzeMessageForToolSuggestions(userMessage, params.tools);
@@ -349,14 +576,18 @@ export class DeepSeekClient {
         
         // Create a regular chat completion without tools for the content
         const response = await this.client.post('/chat/completions', {
-          model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-          messages: params.messages,
+          model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          messages: processedMessages,
           stream: false,
-          temperature: params.temperature !== undefined ? params.temperature : 0.7,
-          max_tokens: params.max_tokens,
+          temperature: appliedOptions.temperature !== undefined ? 
+            appliedOptions.temperature : 
+            (params.temperature !== undefined ? params.temperature : 0.7),
+          max_tokens: appliedOptions.maxTokens || params.max_tokens,
           top_p: params.top_p,
           frequency_penalty: params.frequency_penalty,
           presence_penalty: params.presence_penalty
+        }, {
+          timeout: appliedOptions.timeout || DEEPSEEK_CONFIG.TIMEOUT
         });
         
         return {
@@ -369,14 +600,18 @@ export class DeepSeekClient {
         info('No tool suggestions found, proceeding with regular chat completion');
         
         const response = await this.client.post('/chat/completions', {
-          model: params.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-          messages: params.messages,
+          model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          messages: processedMessages,
           stream: false,
-          temperature: params.temperature !== undefined ? params.temperature : 0.7,
-          max_tokens: params.max_tokens,
+          temperature: appliedOptions.temperature !== undefined ? 
+            appliedOptions.temperature : 
+            (params.temperature !== undefined ? params.temperature : 0.7),
+          max_tokens: appliedOptions.maxTokens || params.max_tokens,
           top_p: params.top_p,
           frequency_penalty: params.frequency_penalty,
           presence_penalty: params.presence_penalty
+        }, {
+          timeout: appliedOptions.timeout || DEEPSEEK_CONFIG.TIMEOUT
         });
         
         return {
@@ -389,6 +624,45 @@ export class DeepSeekClient {
         error: err.message,
         response: err.response?.data,
       });
+
+      // Handle retry strategy if configured
+      if (options?.retryStrategy === 'once') {
+        try {
+          info(`Retrying DeepSeek chat completion with tools (single retry)`);
+          
+          // Apply preset options
+          const appliedOptions = this.applyPresetOptions(options);
+          
+          // Process messages based on options
+          const processedMessages = this.processMessages(params.messages, appliedOptions);
+          
+          // Create a regular chat completion without tools for the content
+          const response = await this.client.post('/chat/completions', {
+            model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+            messages: processedMessages,
+            stream: false,
+            temperature: appliedOptions.temperature !== undefined ? 
+              appliedOptions.temperature : 
+              (params.temperature !== undefined ? params.temperature : 0.7),
+            max_tokens: appliedOptions.maxTokens || params.max_tokens,
+            top_p: params.top_p,
+            frequency_penalty: params.frequency_penalty,
+            presence_penalty: params.presence_penalty
+          }, {
+            timeout: appliedOptions.timeout || DEEPSEEK_CONFIG.TIMEOUT
+          });
+          
+          return {
+            success: true,
+            data: response.data
+          };
+        } catch (retryErr: any) {
+          error(`Retry failed for DeepSeek chat completion with tools`, {
+            error: retryErr.message,
+            response: retryErr.response?.data,
+          });
+        }
+      }
 
       return {
         success: false,
@@ -439,25 +713,10 @@ export class DeepSeekClient {
         suggestions.push({
           tool: 'search_posts',
           description: searchTool.description,
-          confidence: 0.9,
+          confidence: 0.95, // Increased from 0.9 to ensure auto-execution
           suggestedArgs: {
             query: query || 'community',
             hitsPerPage: 5
-          }
-        });
-      }
-    }
-    
-    // Check for feed-related keywords
-    if (message.includes('feed') || message.includes('feeds') || message.includes('channel')) {
-      const feedTool = tools.find(tool => tool.name === 'get_feeds');
-      if (feedTool) {
-        suggestions.push({
-          tool: 'get_feeds',
-          description: feedTool.description,
-          confidence: 0.8,
-          suggestedArgs: {
-            limit: 10
           }
         });
       }

@@ -22,7 +22,7 @@ import {
 import { SECURITY_CONFIG, WS_CONFIG, DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
 import { mcpClient } from './mcp-client';
-import { deepseekClient } from './deepseek-client';
+import { deepseekClient, DeepSeekPreset } from './deepseek-client';
 import { algoliaSearchService } from './algolia-search-service';
 
 /**
@@ -408,6 +408,8 @@ export class ConnectionManager {
           temperature,
           stream: false,
           tools
+        }, {
+          preset: DeepSeekPreset.TOOL_SUGGESTION
         });
         
         const completionDuration = Date.now() - completionStartTime;
@@ -421,18 +423,90 @@ export class ConnectionManager {
           
           // Check if there are tool suggestions
           if (result.toolSuggestions && result.toolSuggestions.length > 0) {
-            debug(`Sending ${result.toolSuggestions.length} tool suggestions to connection ${connection.id}`, {
-              messageId: id,
-              suggestions: result.toolSuggestions.map(s => s.tool)
-            });
-            
-            // Send tool suggestions
-            this.sendMessage(connection, {
-              type: ServerMessageType.TOOL_SUGGESTIONS,
-              id,
-              suggestions: result.toolSuggestions,
-              originalQuery: messages[messages.length - 1].content
-            } as ToolSuggestionsMessage);
+            // Check if any tool has confidence >= 90%
+            const highConfidenceTool = result.toolSuggestions
+              .filter(tool => tool.confidence >= 0.9)
+              .sort((a, b) => b.confidence - a.confidence)[0];
+              
+            if (highConfidenceTool) {
+              // Log auto-execution
+              info(`Auto-executing high confidence tool for connection ${connection.id}`, {
+                messageId: id,
+                tool: highConfidenceTool.tool,
+                confidence: highConfidenceTool.confidence
+              });
+              
+              if (highConfidenceTool.tool === 'search_posts') {
+                // Extract the original query from the user's message
+                const originalQuery = messages[messages.length - 1].content;
+                
+                info(`Auto-executing natural language search for connection ${connection.id}`, {
+                  messageId: id,
+                  query: originalQuery,
+                  confidence: highConfidenceTool.confidence
+                });
+                
+                // Use AlgoliaSearchService to process the natural language query
+                const searchResult = await algoliaSearchService.search(originalQuery);
+                
+                if (searchResult.success) {
+                  // Send natural language search result
+                  this.sendMessage(connection, {
+                    type: ServerMessageType.NATURAL_LANGUAGE_SEARCH_RESULT,
+                    id,
+                    success: true,
+                    searchParams: searchResult.searchParams || {},
+                    searchResults: searchResult.searchResults || {}
+                  } as NaturalLanguageSearchResultMessage);
+                  
+                  info(`Auto-executed natural language search completed successfully for connection ${connection.id}`, {
+                    messageId: id,
+                    query: originalQuery,
+                    resultCount: searchResult.searchResults?.hits?.length || 0,
+                    responseType: 'NATURAL_LANGUAGE_SEARCH_RESULT'
+                  });
+                } else {
+                  // Send error message
+                  this.sendErrorMessage(connection, id, searchResult.error || 'Natural language search failed');
+                }
+              } else {
+                // Execute the tool directly
+                const toolResult = await mcpClient.callTool({
+                  tool: highConfidenceTool.tool,
+                  arguments: highConfidenceTool.suggestedArgs
+                });
+                
+                // Return the result directly
+                if (toolResult.success) {
+                  this.sendMessage(connection, {
+                    type: ServerMessageType.TOOL_RESULT,
+                    id,
+                    tool: highConfidenceTool.tool,
+                    data: toolResult.data,
+                  });
+                  
+                  info(`Auto-executed tool completed successfully for connection ${connection.id}`, {
+                    messageId: id,
+                    tool: highConfidenceTool.tool
+                  });
+                } else {
+                  this.sendErrorMessage(connection, id, toolResult.error || 'Tool call failed');
+                }
+              }
+            } else {
+              debug(`Sending ${result.toolSuggestions.length} tool suggestions to connection ${connection.id}`, {
+                messageId: id,
+                suggestions: result.toolSuggestions.map(s => s.tool)
+              });
+              
+              // Send tool suggestions
+              this.sendMessage(connection, {
+                type: ServerMessageType.TOOL_SUGGESTIONS,
+                id,
+                suggestions: result.toolSuggestions,
+                originalQuery: messages[messages.length - 1].content
+              } as ToolSuggestionsMessage);
+            }
           } else {
             debug(`Sending regular chat completion result to connection ${connection.id}`, {
               messageId: id,
