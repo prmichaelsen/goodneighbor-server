@@ -307,6 +307,17 @@ export class ChatCompletionMessageHandler {
     messages: Array<{role: string; content: string}>,
     no_tool_intent?: number
   ): Promise<void> {
+    // First check if no_tool_intent is high enough to skip tool suggestions entirely
+    if (no_tool_intent !== undefined && no_tool_intent >= 0.7) {
+      info(`Skipping tool suggestions due to high no_tool_intent score (${no_tool_intent}) for connection ${connection.id}`, {
+        messageId
+      });
+      
+      // Create a regular chat completion without tools
+      await this.createRegularChatCompletion(connection, messageId, messages);
+      return;
+    }
+
     // Check if any tool has confidence >= 90%
     const highConfidenceTool = toolSuggestions
       .filter(tool => tool.confidence >= 0.9)
@@ -348,6 +359,7 @@ export class ChatCompletionMessageHandler {
       });
       
       // Send tool suggestions
+      // We still include no_tool_intent in the message for debugging/analytics
       sendMessage(connection.socket, connection.id, {
         type: ServerMessageType.TOOL_SUGGESTIONS,
         id: messageId,
@@ -355,6 +367,71 @@ export class ChatCompletionMessageHandler {
         originalQuery: messages[messages.length - 1].content,
         no_tool_intent: no_tool_intent
       } as ToolSuggestionsMessage);
+    }
+  }
+
+  /**
+   * Create a regular chat completion without tools
+   * 
+   * @param connection The connection state
+   * @param messageId The message ID
+   * @param messages The messages to process
+   */
+  private async createRegularChatCompletion(
+    connection: ConnectionState,
+    messageId: string,
+    messages: Array<{role: string; content: string}>
+  ): Promise<void> {
+    info(`Creating regular chat completion for connection ${connection.id} (skipping tool suggestions)`, {
+      messageId,
+      messageCount: messages.length
+    });
+    
+    // Use the deepseekClient to create a regular chat completion
+    // Explicitly use DeepSeekPreset.DEFAULT to ensure we don't use the TOOL_SUGGESTION preset
+    // This ensures we use all messages, not just the last one
+    const result = await deepseekClient.createChatCompletion({
+      messages,
+      stream: false
+    }, {
+      preset: DeepSeekPreset.DEFAULT // Explicitly use DEFAULT preset to avoid TOOL_SUGGESTION behavior
+    });
+    
+    if (result.success) {
+      debug(`Sending regular chat completion result to connection ${connection.id}`, {
+        messageId,
+        responseSize: JSON.stringify(result.data).length
+      });
+      
+      // Send regular chat completion result
+      sendMessage(connection.socket, connection.id, {
+        type: ServerMessageType.CHAT_COMPLETION_RESULT,
+        id: messageId,
+        result: {
+          id: result.data.id || messageId,
+          object: result.data.object || 'chat.completion',
+          created: result.data.created || Date.now(),
+          model: result.data.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          choices: result.data.choices || [],
+          usage: result.data.usage || {
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            total_tokens: 0
+          }
+        }
+      });
+    } else {
+      // Handle error
+      const errorCode = determineErrorCode(result.error || '', result.details, ErrorCode.INTERNAL_SERVER_ERROR);
+      
+      sendErrorMessage(
+        connection.socket,
+        connection.id,
+        messageId,
+        result.error || ErrorMessageEnum.INTERNAL_SERVER_ERROR,
+        errorCode,
+        { error: result.error, details: result.details }
+      );
     }
   }
 

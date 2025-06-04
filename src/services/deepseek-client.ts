@@ -190,7 +190,11 @@ Example response format for a message with tool intent:
 Example response format for a message with no tool intent:
 {
   "no_tool_intent": 0.98
-}`
+}
+
+IMPORTANT: FORMAT YOUR RESPONSE AS PURE JSON. IT IS USED AS AN API RESPONSE.
+  
+`
   },
   
   [DeepSeekPreset.CUSTOM]: {
@@ -634,7 +638,10 @@ export class DeepSeekClient {
       const userMessage = processedMessages[processedMessages.length - 1].content;
       
       // Check if the message contains keywords related to available tools
-      const toolSuggestions = await this.analyzeMessageForToolSuggestions(userMessage, params.tools);
+      const toolAnalysisResult = await this.analyzeMessageForToolSuggestions(userMessage, params.tools);
+      console.log(toolAnalysisResult);
+      const no_tool_intent = toolAnalysisResult.no_tool_intent;
+      const toolSuggestions = toolAnalysisResult.suggestions;
       
       if (toolSuggestions && toolSuggestions.length > 0) {
         // If we have tool suggestions, return them directly
@@ -659,15 +666,17 @@ export class DeepSeekClient {
         return {
           success: true,
           data: response.data,
-          toolSuggestions
+          toolSuggestions,
+          no_tool_intent
         };
       } else {
         // If no tool suggestions, just do a regular chat completion
         info('No relevant tool suggestions found, proceeding with regular chat completion');
+        console.log(params.messages);
         
         const response = await this.client.post('/chat/completions', {
-          model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
-          messages: processedMessages,
+          model: DEEPSEEK_CONFIG.DEFAULT_MODEL,
+          messages: params.messages,
           stream: false,
           temperature: appliedOptions.temperature !== undefined ? 
             appliedOptions.temperature : 
@@ -682,7 +691,8 @@ export class DeepSeekClient {
         
         return {
           success: true,
-          data: response.data
+          data: response.data,
+          no_tool_intent
         };
       }
     } catch (err: any) {
@@ -744,9 +754,9 @@ export class DeepSeekClient {
    * 
    * @param message The user message to analyze
    * @param tools The available tools
-   * @returns An array of tool suggestions or undefined if no tools are relevant
+   * @returns An object containing tool suggestions and no_tool_intent score
    */
-  private async analyzeMessageForToolSuggestions(message: string, tools: ToolDefinition[]): Promise<ToolSuggestion[] | undefined> {
+  private async analyzeMessageForToolSuggestions(message: string, tools: ToolDefinition[]): Promise<{suggestions: ToolSuggestion[] | undefined, no_tool_intent: number}> {
     try {
       // Get the system prompt from the preset configuration
       const presetConfig = PRESET_CONFIGS[DeepSeekPreset.TOOL_SUGGESTION];
@@ -783,14 +793,14 @@ export class DeepSeekClient {
           error: response.error,
           details: response.details
         });
-        return undefined;
+        return { suggestions: undefined, no_tool_intent: 1.0 }; // Default to high no_tool_intent on error
       }
       
       // Extract the content from the response
       const content = response.data.choices[0]?.message?.content;
       if (!content) {
         error('No content in tool suggestion response', { response: response.data });
-        return undefined;
+        return { suggestions: undefined, no_tool_intent: 1.0 }; // Default to high no_tool_intent on error
       }
       
       // Parse the JSON response
@@ -814,7 +824,7 @@ export class DeepSeekClient {
         // Validate that it has the expected structure
         if (typeof toolSuggestionResult.no_tool_intent !== 'number') {
           error('Invalid tool suggestion result: missing no_tool_intent', { content: cleanedContent });
-          return undefined;
+          return { suggestions: undefined, no_tool_intent: 1.0 }; // Default to high no_tool_intent on error
         }
         
         // Log the result
@@ -825,10 +835,13 @@ export class DeepSeekClient {
             .map(([key, value]) => `${key}: ${value}`)
         });
         
-        // If no_tool_intent is high, return undefined (no tool suggestions)
-        if (toolSuggestionResult.no_tool_intent >= 0.7) {
-          info(`No tool intent detected (score: ${toolSuggestionResult.no_tool_intent})`);
-          return undefined;
+        // Capture the no_tool_intent score
+        const no_tool_intent = toolSuggestionResult.no_tool_intent;
+        
+        // If no_tool_intent is high, return undefined for suggestions but still pass the score
+        if (no_tool_intent >= 0.7) {
+          info(`No tool intent detected (score: ${no_tool_intent})`);
+          return { suggestions: undefined, no_tool_intent };
         }
         
         // Convert the result to an array of ToolSuggestion objects
@@ -893,14 +906,17 @@ export class DeepSeekClient {
         // Sort suggestions by confidence (highest first)
         suggestions.sort((a, b) => b.confidence - a.confidence);
         
-        return suggestions.length > 0 ? suggestions : undefined;
+        return { 
+          suggestions: suggestions.length > 0 ? suggestions : undefined,
+          no_tool_intent
+        };
       } catch (err) {
         error('Failed to parse tool suggestion result', { error: err, content });
-        return undefined;
+        return { suggestions: undefined, no_tool_intent: 1.0 }; // Default to high no_tool_intent on error
       }
     } catch (err) {
       error('Error analyzing message for tool suggestions', { error: err });
-      return undefined;
+      return { suggestions: undefined, no_tool_intent: 1.0 }; // Default to high no_tool_intent on error
     }
   }
 
