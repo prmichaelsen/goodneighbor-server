@@ -34,6 +34,7 @@ export interface DeepSeekOptions {
   maxUserMessageLength?: number;
   retryStrategy?: 'none' | 'once' | 'exponential';
   prioritizePatternMatching?: boolean;
+  numMessages?: number; // Number of most recent messages to include
 }
 
 /**
@@ -140,7 +141,7 @@ const PRESET_CONFIGS: Record<DeepSeekPreset, Partial<DeepSeekOptions>> = {
   },
   
   [DeepSeekPreset.TOOL_SUGGESTION]: {
-    timeout: 5000,
+    timeout: 30000, // Increased from 5000 to 30000 ms (30 seconds)
     maxTokens: 50,
     temperature: 0.2,
     keepAlive: true,
@@ -148,6 +149,7 @@ const PRESET_CONFIGS: Record<DeepSeekPreset, Partial<DeepSeekOptions>> = {
     maxUserMessageLength: 200,
     retryStrategy: 'once',
     prioritizePatternMatching: true,
+    numMessages: 1, // Default to using only the last message
     systemPrompt: `You are a tool selection assistant. Your task is to analyze the user's query and determine which tool would be most appropriate to use.
 
 For each tool, provide:
@@ -296,6 +298,33 @@ export class DeepSeekClient {
   }
 
   /**
+   * Truncate messages to the specified number of most recent messages
+   * Always preserves system messages
+   */
+  private truncateMessages(
+    messages: Array<{role: string; content: string}>,
+    numMessages?: number
+  ): Array<{role: string; content: string}> {
+    if (!numMessages || numMessages <= 0 || messages.length <= numMessages) {
+      return messages;
+    }
+    
+    // Get system messages
+    const systemMessages = messages.filter(msg => msg.role === 'system');
+    
+    // Get non-system messages
+    const nonSystemMessages = messages.filter(msg => msg.role !== 'system');
+    
+    // Get the specified number of most recent non-system messages
+    const recentMessages = nonSystemMessages.slice(
+      Math.max(0, nonSystemMessages.length - numMessages)
+    );
+    
+    // Combine system messages with recent messages
+    return [...systemMessages, ...recentMessages];
+  }
+
+  /**
    * Process messages based on options
    */
   private processMessages(
@@ -303,6 +332,11 @@ export class DeepSeekClient {
     options: DeepSeekOptions
   ): Array<{role: string; content: string}> {
     let processedMessages = [...messages];
+    
+    // Truncate messages if needed
+    if (options.numMessages) {
+      processedMessages = this.truncateMessages(processedMessages, options.numMessages);
+    }
     
     // Truncate user message if needed
     if (options.truncateUserMessage && options.maxUserMessageLength) {

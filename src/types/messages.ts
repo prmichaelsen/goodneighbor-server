@@ -30,6 +30,40 @@ export enum ServerMessageType {
 }
 
 /**
+ * Error codes for error messages
+ */
+export enum ErrorCode {
+  AUTHENTICATION_FAILED = 'AUTH_FAILED',
+  INVALID_MESSAGE_FORMAT = 'INVALID_FORMAT',
+  TOOL_CALL_FAILED = 'TOOL_CALL_FAILED',
+  INTERNAL_SERVER_ERROR = 'INTERNAL_ERROR',
+  NOT_AUTHENTICATED = 'NOT_AUTHENTICATED',
+  INVALID_PARAMETERS = 'INVALID_PARAMS',
+  RATE_LIMIT_EXCEEDED = 'RATE_LIMIT',
+  RESOURCE_NOT_FOUND = 'NOT_FOUND',
+  PERMISSION_DENIED = 'PERMISSION_DENIED',
+  SERVICE_UNAVAILABLE = 'SERVICE_UNAVAILABLE',
+  TIMEOUT = 'TIMEOUT'
+}
+
+/**
+ * Standard error messages
+ */
+export enum ErrorMessageEnum {
+  AUTHENTICATION_FAILED = 'Authentication failed',
+  INVALID_MESSAGE_FORMAT = 'Invalid message format',
+  TOOL_CALL_FAILED = 'Tool call failed',
+  INTERNAL_SERVER_ERROR = 'Internal server error',
+  NOT_AUTHENTICATED = 'Not authenticated',
+  INVALID_PARAMETERS = 'Invalid parameters',
+  RATE_LIMIT_EXCEEDED = 'Rate limit exceeded',
+  RESOURCE_NOT_FOUND = 'Resource not found',
+  PERMISSION_DENIED = 'Permission denied',
+  SERVICE_UNAVAILABLE = 'Service unavailable',
+  TIMEOUT = 'Operation timed out'
+}
+
+/**
  * Base message interface
  */
 export interface BaseMessage {
@@ -125,8 +159,9 @@ export interface ToolResultMessage extends BaseMessage {
  */
 export interface ErrorMessage extends BaseMessage {
   type: ServerMessageType.ERROR;
-  error: string;
-  code?: string;
+  code: ErrorCode;
+  message: string | ErrorMessageEnum;
+  context?: Record<string, any>; // Optional context object for additional details
 }
 
 /**

@@ -17,7 +17,9 @@ import {
   ToolSelectionMessage,
   ToolSuggestionsMessage,
   NaturalLanguageSearchMessage,
-  NaturalLanguageSearchResultMessage
+  NaturalLanguageSearchResultMessage,
+  ErrorCode,
+  ErrorMessageEnum
 } from '../types/messages';
 import { SECURITY_CONFIG, WS_CONFIG, DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
@@ -166,7 +168,13 @@ export class ConnectionManager {
         default:
           // Use type assertion for unknown message types
           const unknownMessage = message as {id: string; type: string};
-          this.sendErrorMessage(connection, unknownMessage.id, `Unknown message type: ${unknownMessage.type}`);
+          this.sendErrorMessage(
+            connection, 
+            unknownMessage.id, 
+            `Unknown message type: ${unknownMessage.type}`,
+            ErrorCode.INVALID_MESSAGE_FORMAT,
+            { messageType: unknownMessage.type }
+          );
       }
     } catch (err: any) {
       error(`Error handling message for connection ${connectionId}`, { error: err });
@@ -176,7 +184,9 @@ export class ConnectionManager {
         connection.socket.send(JSON.stringify({
           type: ServerMessageType.ERROR,
           id: uuidv4(),
-          error: 'Failed to process message: ' + (err.message || 'Unknown error'),
+          code: ErrorCode.INTERNAL_SERVER_ERROR,
+          message: 'Failed to process message: ' + (err.message || 'Unknown error'),
+          context: { error: err.message }
         }));
       } catch (sendErr) {
         error(`Failed to send error message to connection ${connectionId}`, { error: sendErr });
@@ -242,7 +252,12 @@ export class ConnectionManager {
     
     // Check if authenticated
     if (!connection.isAuthenticated) {
-      this.sendErrorMessage(connection, id, 'Not authenticated');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        ErrorMessageEnum.NOT_AUTHENTICATED, 
+        ErrorCode.NOT_AUTHENTICATED
+      );
       return;
     }
     
@@ -270,11 +285,23 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
-        this.sendErrorMessage(connection, id, result.error || 'Tool call failed');
+        this.sendErrorMessage(
+          connection, 
+          id, 
+          result.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
+          ErrorCode.TOOL_CALL_FAILED,
+          { tool, arguments: args }
+        );
       }
     } catch (err: any) {
       error(`Error calling tool ${tool} for connection ${connection.id}`, { error: err });
-      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
+        ErrorCode.INTERNAL_SERVER_ERROR,
+        { tool, error: err.message, stack: err.stack }
+      );
     }
   }
 
@@ -302,7 +329,12 @@ export class ConnectionManager {
     
     // Check if authenticated
     if (!connection.isAuthenticated) {
-      this.sendErrorMessage(connection, id, 'Not authenticated');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        ErrorMessageEnum.NOT_AUTHENTICATED, 
+        ErrorCode.NOT_AUTHENTICATED
+      );
       return;
     }
     
@@ -373,7 +405,13 @@ export class ConnectionManager {
             model,
             elapsedTime: `${Date.now() - startTime}ms`
           });
-          this.sendErrorMessage(connection, id, err.message || 'Streaming error');
+          this.sendErrorMessage(
+            connection, 
+            id, 
+            err.message || 'Streaming error', 
+            ErrorCode.INTERNAL_SERVER_ERROR,
+            { model, error: err.message, stack: err.stack }
+          );
         });
         
         streamEmitter.on('end', () => {
@@ -409,7 +447,8 @@ export class ConnectionManager {
           stream: false,
           tools
         }, {
-          preset: DeepSeekPreset.TOOL_SUGGESTION
+          preset: DeepSeekPreset.TOOL_SUGGESTION,
+          numMessages: 1 // Use only the most recent message for tool analysis
         });
         
         const completionDuration = Date.now() - completionStartTime;
@@ -467,7 +506,13 @@ export class ConnectionManager {
                   });
                 } else {
                   // Send error message
-                  this.sendErrorMessage(connection, id, searchResult.error || 'Natural language search failed');
+                  this.sendErrorMessage(
+                    connection, 
+                    id, 
+                    searchResult.error || ErrorMessageEnum.RESOURCE_NOT_FOUND, 
+                    ErrorCode.RESOURCE_NOT_FOUND,
+                    { query: originalQuery }
+                  );
                 }
               } else {
                 // Execute the tool directly
@@ -490,7 +535,13 @@ export class ConnectionManager {
                     tool: highConfidenceTool.tool
                   });
                 } else {
-                  this.sendErrorMessage(connection, id, toolResult.error || 'Tool call failed');
+                  this.sendErrorMessage(
+                    connection, 
+                    id, 
+                    toolResult.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
+                    ErrorCode.TOOL_CALL_FAILED,
+                    { tool: highConfidenceTool.tool, arguments: highConfidenceTool.suggestedArgs }
+                  );
                 }
               }
             } else {
@@ -540,7 +591,13 @@ export class ConnectionManager {
             duration: `${completionDuration}ms`
           });
           
-          this.sendErrorMessage(connection, id, result.error || 'Chat completion failed');
+          this.sendErrorMessage(
+            connection, 
+            id, 
+            result.error || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
+            ErrorCode.INTERNAL_SERVER_ERROR,
+            { model, error: result.error, details: result.details }
+          );
         }
       }
     } catch (err: any) {
@@ -549,7 +606,13 @@ export class ConnectionManager {
         messageId: id,
         stack: err.stack
       });
-      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
+        ErrorCode.INTERNAL_SERVER_ERROR,
+        { model, error: err.message, stack: err.stack }
+      );
     }
   }
 
@@ -561,7 +624,12 @@ export class ConnectionManager {
     
     // Check if authenticated
     if (!connection.isAuthenticated) {
-      this.sendErrorMessage(connection, id, 'Not authenticated');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        ErrorMessageEnum.NOT_AUTHENTICATED, 
+        ErrorCode.NOT_AUTHENTICATED
+      );
       return;
     }
     
@@ -589,11 +657,23 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
-        this.sendErrorMessage(connection, id, result.error || 'Tool call failed');
+        this.sendErrorMessage(
+          connection, 
+          id, 
+          result.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
+          ErrorCode.TOOL_CALL_FAILED,
+          { tool: toolName, arguments: args }
+        );
       }
     } catch (err: any) {
       error(`Error calling selected tool ${toolName} for connection ${connection.id}`, { error: err });
-      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
+        ErrorCode.INTERNAL_SERVER_ERROR,
+        { tool: toolName, error: err.message, stack: err.stack }
+      );
     }
   }
 
@@ -633,11 +713,19 @@ export class ConnectionManager {
   /**
    * Send an error message to a connection
    */
-  private sendErrorMessage(connection: ConnectionState, correlationId: string, errorMessage: string): void {
+  private sendErrorMessage(
+    connection: ConnectionState, 
+    correlationId: string, 
+    errorMessage: string | ErrorMessageEnum, 
+    errorCode: ErrorCode = ErrorCode.INTERNAL_SERVER_ERROR,
+    context?: Record<string, any>
+  ): void {
     this.sendMessage(connection, {
       type: ServerMessageType.ERROR,
       id: correlationId,
-      error: errorMessage,
+      code: errorCode,
+      message: errorMessage,
+      context: context
     });
   }
 
@@ -703,7 +791,12 @@ export class ConnectionManager {
     
     // Check if authenticated
     if (!connection.isAuthenticated) {
-      this.sendErrorMessage(connection, id, 'Not authenticated');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        ErrorMessageEnum.NOT_AUTHENTICATED, 
+        ErrorCode.NOT_AUTHENTICATED
+      );
       return;
     }
     
@@ -775,7 +868,13 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
-        this.sendErrorMessage(connection, id, result.error || 'Natural language search failed');
+        this.sendErrorMessage(
+          connection, 
+          id, 
+          result.error || ErrorMessageEnum.RESOURCE_NOT_FOUND, 
+          ErrorCode.RESOURCE_NOT_FOUND,
+          { query, searchParams: result.searchParams }
+        );
       }
     } catch (err: any) {
       error(`Error in natural language search for connection ${connection.id}`, { 
@@ -784,7 +883,13 @@ export class ConnectionManager {
         query,
         stack: err.stack
       });
-      this.sendErrorMessage(connection, id, err.message || 'Internal server error');
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
+        ErrorCode.INTERNAL_SERVER_ERROR,
+        { query, error: err.message, stack: err.stack }
+      );
     }
   }
 
