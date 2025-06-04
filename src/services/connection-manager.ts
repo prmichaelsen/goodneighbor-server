@@ -23,6 +23,7 @@ import {
 } from '../types/messages';
 import { SECURITY_CONFIG, WS_CONFIG, DEEPSEEK_CONFIG } from '../config';
 import { debug, error, info, warn } from '../utils/logger';
+import { determineErrorCode } from '../utils/error-utils';
 import { mcpClient } from './mcp-client';
 import { deepseekClient, DeepSeekPreset } from './deepseek-client';
 import { algoliaSearchService } from './algolia-search-service';
@@ -181,10 +182,13 @@ export class ConnectionManager {
       
       try {
         // Try to send an error message
+        // Use the utility function to determine the appropriate error code
+        const errorCode = determineErrorCode(err);
+        
         connection.socket.send(JSON.stringify({
           type: ServerMessageType.ERROR,
           id: uuidv4(),
-          code: ErrorCode.INTERNAL_SERVER_ERROR,
+          code: errorCode,
           message: 'Failed to process message: ' + (err.message || 'Unknown error'),
           context: { error: err.message }
         }));
@@ -285,22 +289,29 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
+        // Use the utility function to determine the appropriate error code
+        const errorCode = determineErrorCode(result.error || '', result.details);
+        
         this.sendErrorMessage(
           connection, 
           id, 
           result.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
-          ErrorCode.TOOL_CALL_FAILED,
+          errorCode,
           { tool, arguments: args }
         );
       }
     } catch (err: any) {
       error(`Error calling tool ${tool} for connection ${connection.id}`, { error: err });
+      
+      // Use the utility function to determine the appropriate error code
+      const errorCode = determineErrorCode(err, err.details);
+      
       this.sendErrorMessage(
         connection, 
         id, 
         err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
-        ErrorCode.INTERNAL_SERVER_ERROR,
-        { tool, error: err.message, stack: err.stack }
+        errorCode,
+        { tool, error: err.message, stack: err.stack, duration: `${Date.now() - (err.startTime || 0)}ms` }
       );
     }
   }
@@ -405,12 +416,16 @@ export class ConnectionManager {
             model,
             elapsedTime: `${Date.now() - startTime}ms`
           });
+          
+          // Use the utility function to determine the appropriate error code
+          const errorCode = determineErrorCode(err, err.details);
+          
           this.sendErrorMessage(
             connection, 
             id, 
             err.message || 'Streaming error', 
-            ErrorCode.INTERNAL_SERVER_ERROR,
-            { model, error: err.message, stack: err.stack }
+            errorCode,
+            { model, error: err.message, stack: err.stack, duration: `${Date.now() - startTime}ms` }
           );
         });
         
@@ -506,11 +521,14 @@ export class ConnectionManager {
                   });
                 } else {
                   // Send error message
+                  // Use the utility function to determine the appropriate error code
+                  const errorCode = determineErrorCode(searchResult.error || '', searchResult.details);
+                  
                   this.sendErrorMessage(
                     connection, 
                     id, 
                     searchResult.error || ErrorMessageEnum.RESOURCE_NOT_FOUND, 
-                    ErrorCode.RESOURCE_NOT_FOUND,
+                    errorCode,
                     { query: originalQuery }
                   );
                 }
@@ -535,11 +553,14 @@ export class ConnectionManager {
                     tool: highConfidenceTool.tool
                   });
                 } else {
+                  // Use the utility function to determine the appropriate error code
+                  const errorCode = determineErrorCode(toolResult.error || '', toolResult.details);
+                  
                   this.sendErrorMessage(
                     connection, 
                     id, 
                     toolResult.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
-                    ErrorCode.TOOL_CALL_FAILED,
+                    errorCode,
                     { tool: highConfidenceTool.tool, arguments: highConfidenceTool.suggestedArgs }
                   );
                 }
@@ -591,12 +612,15 @@ export class ConnectionManager {
             duration: `${completionDuration}ms`
           });
           
+          // Use the utility function to determine the appropriate error code
+          const errorCode = determineErrorCode(result.error || '', result.details);
+          
           this.sendErrorMessage(
             connection, 
             id, 
             result.error || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
-            ErrorCode.INTERNAL_SERVER_ERROR,
-            { model, error: result.error, details: result.details }
+            errorCode,
+            { model, error: result.error, details: result.details, duration: `${completionDuration}ms` }
           );
         }
       }
@@ -606,12 +630,16 @@ export class ConnectionManager {
         messageId: id,
         stack: err.stack
       });
+      
+      // Use the utility function to determine the appropriate error code
+      const errorCode = determineErrorCode(err, err.details);
+      
       this.sendErrorMessage(
         connection, 
         id, 
         err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
-        ErrorCode.INTERNAL_SERVER_ERROR,
-        { model, error: err.message, stack: err.stack }
+        errorCode,
+        { model, error: err.message, stack: err.stack, duration: `${Date.now() - (err.startTime || 0)}ms` }
       );
     }
   }
@@ -657,22 +685,29 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
+        // Use the utility function to determine the appropriate error code
+        const errorCode = determineErrorCode(result.error || '', result.details);
+        
         this.sendErrorMessage(
           connection, 
           id, 
           result.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
-          ErrorCode.TOOL_CALL_FAILED,
+          errorCode,
           { tool: toolName, arguments: args }
         );
       }
     } catch (err: any) {
       error(`Error calling selected tool ${toolName} for connection ${connection.id}`, { error: err });
+      
+      // Use the utility function to determine the appropriate error code
+      const errorCode = determineErrorCode(err, err.details);
+      
       this.sendErrorMessage(
         connection, 
         id, 
         err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
-        ErrorCode.INTERNAL_SERVER_ERROR,
-        { tool: toolName, error: err.message, stack: err.stack }
+        errorCode,
+        { tool: toolName, error: err.message, stack: err.stack, duration: `${Date.now() - (err.startTime || 0)}ms` }
       );
     }
   }
@@ -868,11 +903,14 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
+        // Use the utility function to determine the appropriate error code
+        const errorCode = determineErrorCode(result.error || '', result.details);
+        
         this.sendErrorMessage(
           connection, 
           id, 
           result.error || ErrorMessageEnum.RESOURCE_NOT_FOUND, 
-          ErrorCode.RESOURCE_NOT_FOUND,
+          errorCode,
           { query, searchParams: result.searchParams }
         );
       }
@@ -883,12 +921,16 @@ export class ConnectionManager {
         query,
         stack: err.stack
       });
+      
+      // Use the utility function to determine the appropriate error code
+      const errorCode = determineErrorCode(err, err.details);
+      
       this.sendErrorMessage(
         connection, 
         id, 
         err.message || ErrorMessageEnum.INTERNAL_SERVER_ERROR, 
-        ErrorCode.INTERNAL_SERVER_ERROR,
-        { query, error: err.message, stack: err.stack }
+        errorCode,
+        { query, error: err.message, stack: err.stack, duration: `${Date.now() - (err.startTime || 0)}ms` }
       );
     }
   }
