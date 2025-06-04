@@ -10,11 +10,13 @@ import { ErrorCode } from '../types/messages';
  * 
  * @param error - The error object or message
  * @param details - Optional additional error details
+ * @param defaultErrorCode - Optional default error code to use if no specific error type is detected
  * @returns The appropriate ErrorCode
  */
 export function determineErrorCode(
   error: Error | string,
-  details?: string
+  details?: string,
+  defaultErrorCode: ErrorCode = ErrorCode.INTERNAL_SERVER_ERROR
 ): ErrorCode {
   // Get the error message as a string
   const errorMessage = typeof error === 'string' 
@@ -91,6 +93,6 @@ export function determineErrorCode(
     return ErrorCode.SERVICE_UNAVAILABLE;
   }
   
-  // Default to internal server error
-  return ErrorCode.INTERNAL_SERVER_ERROR;
+  // Return the provided default error code if no specific error type is detected
+  return defaultErrorCode;
 }

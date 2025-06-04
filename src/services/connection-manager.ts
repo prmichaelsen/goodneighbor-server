@@ -183,7 +183,8 @@ export class ConnectionManager {
       try {
         // Try to send an error message
         // Use the utility function to determine the appropriate error code
-        const errorCode = determineErrorCode(err);
+        // Use INVALID_MESSAGE_FORMAT as the default error code for message parsing errors
+        const errorCode = determineErrorCode(err, undefined, ErrorCode.INVALID_MESSAGE_FORMAT);
         
         connection.socket.send(JSON.stringify({
           type: ServerMessageType.ERROR,
@@ -289,22 +290,24 @@ export class ConnectionManager {
         });
       } else {
         // Send error message
-        // Use the utility function to determine the appropriate error code
-        const errorCode = determineErrorCode(result.error || '', result.details);
-        
-        this.sendErrorMessage(
-          connection, 
-          id, 
-          result.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
-          errorCode,
-          { tool, arguments: args }
-        );
+      // Use the utility function to determine the appropriate error code
+      // Use TOOL_CALL_FAILED as the default error code for tool call failures
+      const errorCode = determineErrorCode(result.error || '', result.details, ErrorCode.TOOL_CALL_FAILED);
+      
+      this.sendErrorMessage(
+        connection, 
+        id, 
+        result.error || ErrorMessageEnum.TOOL_CALL_FAILED, 
+        errorCode,
+        { tool, arguments: args }
+      );
       }
     } catch (err: any) {
       error(`Error calling tool ${tool} for connection ${connection.id}`, { error: err });
       
       // Use the utility function to determine the appropriate error code
-      const errorCode = determineErrorCode(err, err.details);
+      // Use TOOL_CALL_FAILED as the default error code for tool call errors
+      const errorCode = determineErrorCode(err, err.details, ErrorCode.TOOL_CALL_FAILED);
       
       this.sendErrorMessage(
         connection, 
@@ -418,7 +421,8 @@ export class ConnectionManager {
           });
           
           // Use the utility function to determine the appropriate error code
-          const errorCode = determineErrorCode(err, err.details);
+          // Use TIMEOUT as the default error code for streaming errors, as they're often timeout related
+          const errorCode = determineErrorCode(err, err.details, ErrorCode.TIMEOUT);
           
           this.sendErrorMessage(
             connection, 
@@ -522,7 +526,8 @@ export class ConnectionManager {
                 } else {
                   // Send error message
                   // Use the utility function to determine the appropriate error code
-                  const errorCode = determineErrorCode(searchResult.error || '', searchResult.details);
+                  // Use RESOURCE_NOT_FOUND as the default error code for search failures
+                  const errorCode = determineErrorCode(searchResult.error || '', searchResult.details, ErrorCode.RESOURCE_NOT_FOUND);
                   
                   this.sendErrorMessage(
                     connection, 
@@ -554,7 +559,8 @@ export class ConnectionManager {
                   });
                 } else {
                   // Use the utility function to determine the appropriate error code
-                  const errorCode = determineErrorCode(toolResult.error || '', toolResult.details);
+                  // Use TOOL_CALL_FAILED as the default error code for auto-executed tool failures
+                  const errorCode = determineErrorCode(toolResult.error || '', toolResult.details, ErrorCode.TOOL_CALL_FAILED);
                   
                   this.sendErrorMessage(
                     connection, 
@@ -613,7 +619,8 @@ export class ConnectionManager {
           });
           
           // Use the utility function to determine the appropriate error code
-          const errorCode = determineErrorCode(result.error || '', result.details);
+          // Use INTERNAL_SERVER_ERROR as the default error code for chat completion failures
+          const errorCode = determineErrorCode(result.error || '', result.details, ErrorCode.INTERNAL_SERVER_ERROR);
           
           this.sendErrorMessage(
             connection, 
@@ -632,7 +639,8 @@ export class ConnectionManager {
       });
       
       // Use the utility function to determine the appropriate error code
-      const errorCode = determineErrorCode(err, err.details);
+      // Use INTERNAL_SERVER_ERROR as the default error code for general chat completion errors
+      const errorCode = determineErrorCode(err, err.details, ErrorCode.INTERNAL_SERVER_ERROR);
       
       this.sendErrorMessage(
         connection, 
@@ -686,7 +694,8 @@ export class ConnectionManager {
       } else {
         // Send error message
         // Use the utility function to determine the appropriate error code
-        const errorCode = determineErrorCode(result.error || '', result.details);
+        // Use TOOL_CALL_FAILED as the default error code for tool selection failures
+        const errorCode = determineErrorCode(result.error || '', result.details, ErrorCode.TOOL_CALL_FAILED);
         
         this.sendErrorMessage(
           connection, 
@@ -700,7 +709,8 @@ export class ConnectionManager {
       error(`Error calling selected tool ${toolName} for connection ${connection.id}`, { error: err });
       
       // Use the utility function to determine the appropriate error code
-      const errorCode = determineErrorCode(err, err.details);
+      // Use TOOL_CALL_FAILED as the default error code for tool selection errors
+      const errorCode = determineErrorCode(err, err.details, ErrorCode.TOOL_CALL_FAILED);
       
       this.sendErrorMessage(
         connection, 
@@ -904,7 +914,8 @@ export class ConnectionManager {
       } else {
         // Send error message
         // Use the utility function to determine the appropriate error code
-        const errorCode = determineErrorCode(result.error || '', result.details);
+        // Use RESOURCE_NOT_FOUND as the default error code for search failures
+        const errorCode = determineErrorCode(result.error || '', result.details, ErrorCode.RESOURCE_NOT_FOUND);
         
         this.sendErrorMessage(
           connection, 
@@ -923,7 +934,8 @@ export class ConnectionManager {
       });
       
       // Use the utility function to determine the appropriate error code
-      const errorCode = determineErrorCode(err, err.details);
+      // Use RESOURCE_NOT_FOUND as the default error code for natural language search errors
+      const errorCode = determineErrorCode(err, err.details, ErrorCode.RESOURCE_NOT_FOUND);
       
       this.sendErrorMessage(
         connection, 

@@ -141,8 +141,7 @@ const PRESET_CONFIGS: Record<DeepSeekPreset, Partial<DeepSeekOptions>> = {
   },
   
   [DeepSeekPreset.TOOL_SUGGESTION]: {
-    // timeout: 30000, // Increased from 5000 to 30000 ms (30 seconds)
-    timeout: 300, // Increased from 5000 to 30000 ms (30 seconds)
+    timeout: 60000,
     maxTokens: 50,
     temperature: 0.2,
     keepAlive: true,
