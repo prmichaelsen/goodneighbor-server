@@ -8,7 +8,16 @@ import express from 'express';
 import WebSocket from 'ws';
 import cors from 'cors';
 import { SERVER_CONFIG, WS_CONFIG, validateConfig, DEEPSEEK_CONFIG } from './config';
-import { connectionManager } from './services/connection-manager';
+import { ConnectionManager } from './services/connection';
+import { 
+  AuthMessageHandler, 
+  PingMessageHandler, 
+  ToolCallMessageHandler, 
+  ToolSelectionMessageHandler, 
+  NaturalLanguageSearchMessageHandler, 
+  ChatCompletionMessageHandler 
+} from './services/handlers';
+import { MessageRouter } from './services/connection';
 import { mcpClient } from './services/mcp-client';
 import { deepseekClient } from './services/deepseek-client';
 import { debug, error, info, warn } from './utils/logger';
@@ -21,6 +30,7 @@ export class Server {
   private httpServer: http.Server;
   private wsServer: WebSocket.Server;
   private isRunning: boolean;
+  private connectionManager: ConnectionManager;
 
   constructor() {
     // Create Express app
@@ -36,6 +46,27 @@ export class Server {
     });
     
     this.isRunning = false;
+    
+    // Create message handlers
+    const authHandler = new AuthMessageHandler();
+    const pingHandler = new PingMessageHandler();
+    const toolCallHandler = new ToolCallMessageHandler();
+    const toolSelectionHandler = new ToolSelectionMessageHandler();
+    const naturalLanguageSearchHandler = new NaturalLanguageSearchMessageHandler();
+    const chatCompletionHandler = new ChatCompletionMessageHandler();
+    
+    // Create message router
+    const messageRouter = new MessageRouter(
+      authHandler,
+      toolCallHandler,
+      pingHandler,
+      chatCompletionHandler,
+      toolSelectionHandler,
+      naturalLanguageSearchHandler
+    );
+    
+    // Create connection manager
+    this.connectionManager = new ConnectionManager(messageRouter);
   }
 
   /**
@@ -55,7 +86,7 @@ export class Server {
     this.configureWebSocketServer();
     
     // Initialize connection manager
-    connectionManager.initialize();
+    this.connectionManager.initialize();
     
     info('Server initialized');
   }
@@ -95,8 +126,8 @@ export class Server {
           environment: SERVER_CONFIG.NODE_ENV,
           uptime: process.uptime(),
           connections: {
-            total: connectionManager.getConnectionCount(),
-            authenticated: connectionManager.getAuthenticatedConnectionCount(),
+            total: this.connectionManager.getConnectionCount(),
+            authenticated: this.connectionManager.getAuthenticatedConnectionCount(),
           },
           services: {}
         };
@@ -229,10 +260,10 @@ export class Server {
         websocket: {
           path: WS_CONFIG.PATH,
         },
-        connections: {
-          total: connectionManager.getConnectionCount(),
-          authenticated: connectionManager.getAuthenticatedConnectionCount(),
-        },
+          connections: {
+            total: this.connectionManager.getConnectionCount(),
+            authenticated: this.connectionManager.getAuthenticatedConnectionCount(),
+          },
       });
     });
     
@@ -251,7 +282,7 @@ export class Server {
   private configureWebSocketServer(): void {
     this.wsServer.on('connection', (socket, request) => {
       // Add connection to manager
-      const connectionId = connectionManager.addConnection(socket);
+      const connectionId = this.connectionManager.addConnection(socket);
       
       info(`WebSocket connection established: ${connectionId}`);
       
@@ -309,7 +340,7 @@ export class Server {
       }
       
       // Shutdown connection manager
-      connectionManager.shutdown();
+      this.connectionManager.shutdown();
       
       // Close WebSocket server
       this.wsServer.close((err) => {
@@ -337,3 +368,6 @@ export class Server {
 
 // Export a singleton instance
 export const server = new Server();
+
+// Export connection manager for testing
+export const getConnectionManager = () => (server as any).connectionManager;
