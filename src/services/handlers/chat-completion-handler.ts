@@ -228,19 +228,21 @@ export class ChatCompletionMessageHandler {
         hasSuggestions: !!result.toolSuggestions && result.toolSuggestions.length > 0
       });
       
-      // Check if there are tool suggestions
-      if (result.toolSuggestions && result.toolSuggestions.length > 0) {
-        await this.handleToolSuggestions(
-          connection,
-          messageId,
-          result.toolSuggestions,
-          messages
-        );
-      } else {
-        debug(`Sending regular chat completion result to connection ${connection.id}`, {
-          messageId,
-          responseSize: JSON.stringify(result.data).length
-        });
+    // Check if there are tool suggestions and the no_tool_intent score is low enough
+    if (result.toolSuggestions && result.toolSuggestions.length > 0) {
+      await this.handleToolSuggestions(
+        connection,
+        messageId,
+        result.toolSuggestions,
+        messages,
+        result.no_tool_intent
+      );
+    } else {
+      debug(`Sending regular chat completion result to connection ${connection.id}`, {
+        messageId,
+        responseSize: JSON.stringify(result.data).length,
+        no_tool_intent: result.no_tool_intent
+      });
         
         // Send regular chat completion result
         // Ensure the message follows the ChatCompletionResultMessage interface
@@ -291,6 +293,7 @@ export class ChatCompletionMessageHandler {
    * @param messageId The message ID
    * @param toolSuggestions The tool suggestions
    * @param messages The original messages
+   * @param no_tool_intent The no_tool_intent score (0-1)
    */
   private async handleToolSuggestions(
     connection: ConnectionState,
@@ -301,7 +304,8 @@ export class ChatCompletionMessageHandler {
       confidence: number;
       suggestedArgs: Record<string, any>;
     }>,
-    messages: Array<{role: string; content: string}>
+    messages: Array<{role: string; content: string}>,
+    no_tool_intent?: number
   ): Promise<void> {
     // Check if any tool has confidence >= 90%
     const highConfidenceTool = toolSuggestions
@@ -336,12 +340,20 @@ export class ChatCompletionMessageHandler {
         suggestions: toolSuggestions.map(s => s.tool)
       });
       
+      // Log the no_tool_intent score
+      info(`Tool suggestion analysis result for connection ${connection.id}`, {
+        messageId,
+        suggestionCount: toolSuggestions.length,
+        noToolIntent: no_tool_intent
+      });
+      
       // Send tool suggestions
       sendMessage(connection.socket, connection.id, {
         type: ServerMessageType.TOOL_SUGGESTIONS,
         id: messageId,
         suggestions: toolSuggestions,
-        originalQuery: messages[messages.length - 1].content
+        originalQuery: messages[messages.length - 1].content,
+        no_tool_intent: no_tool_intent
       } as ToolSuggestionsMessage);
     }
   }

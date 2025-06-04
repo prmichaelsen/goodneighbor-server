@@ -24,7 +24,11 @@ export function determineErrorCode(
     : (error.message || '').toLowerCase();
   
   // Get the details as a string (if provided)
-  const errorDetails = details ? details.toLowerCase() : '';
+  const errorDetails = details 
+    ? (typeof details === 'string' 
+        ? details.toLowerCase() 
+        : JSON.stringify(details).toLowerCase())
+    : '';
   
   // Check for timeout errors
   if (

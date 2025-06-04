@@ -96,6 +96,15 @@ export interface ToolSuggestion {
 }
 
 /**
+ * Tool Suggestion Result
+ * Contains confidence scores for each tool and a no_tool_intent score
+ */
+export interface ToolSuggestionResult {
+  no_tool_intent: number; // Score between 0 and 1 indicating likelihood user isn't trying to use a tool
+  [toolName: string]: number; // Confidence scores for each tool (0-1)
+}
+
+/**
  * DeepSeek Chat Completion Result
  */
 export interface DeepSeekChatCompletionResult {
@@ -104,6 +113,7 @@ export interface DeepSeekChatCompletionResult {
   error?: string;
   details?: string;
   toolSuggestions?: ToolSuggestion[];
+  no_tool_intent?: number;
 }
 
 /**
@@ -142,7 +152,7 @@ const PRESET_CONFIGS: Record<DeepSeekPreset, Partial<DeepSeekOptions>> = {
   
   [DeepSeekPreset.TOOL_SUGGESTION]: {
     timeout: 60000,
-    maxTokens: 50,
+    maxTokens: 500,
     temperature: 0.2,
     keepAlive: true,
     truncateUserMessage: true,
@@ -150,14 +160,37 @@ const PRESET_CONFIGS: Record<DeepSeekPreset, Partial<DeepSeekOptions>> = {
     retryStrategy: 'once',
     prioritizePatternMatching: true,
     numMessages: 1, // Default to using only the last message
-    systemPrompt: `You are a tool selection assistant. Your task is to analyze the user's query and determine which tool would be most appropriate to use.
+    systemPrompt: `You are a tool selection assistant. Your task is to analyze the user's query and determine which tools would be most appropriate to use, if any.
 
-For each tool, provide:
-1. The tool name
-2. A confidence score between 0 and 1 (where 1 is 100% confidence)
-3. Suggested arguments for the tool
+You must respond with a valid JSON object containing:
+1. "no_tool_intent": A score between 0 and 1 indicating how likely it is that the user is NOT trying to use any tool (where 1 means definitely not trying to use a tool)
+2. For each available tool, include a score between 0 and 1 indicating the confidence that this tool should be used
 
-IMPORTANT: Only assign a confidence score >= 0.9 if you are VERY certain that the tool is the correct one to use for the query. A confidence score of 0.9 or higher will result in automatic execution without user confirmation.`
+Available tools:
+- search_posts: Search for posts using Algolia proxy
+- create_post: Create a new post
+- update_post: Update an existing post
+- delete_post: Delete a post
+
+IMPORTANT GUIDELINES:
+- Only assign a confidence score >= 0.9 if you are VERY certain that the tool is the correct one to use
+- If the user is clearly not trying to use any tool, set no_tool_intent to 0.95 or higher
+- If the user is clearly trying to use a tool, set no_tool_intent to 0.2 or lower
+- Your response must be valid JSON that can be parsed
+- Do not include any explanations or text outside of the JSON object
+- Only include tools with non-zero confidence scores
+
+Example response format for a message with tool intent:
+{
+  "no_tool_intent": 0.1,
+  "search_posts": 0.95,
+  "create_post": 0.2
+}
+
+Example response format for a message with no tool intent:
+{
+  "no_tool_intent": 0.98
+}`
   },
   
   [DeepSeekPreset.CUSTOM]: {
@@ -578,7 +611,7 @@ export class DeepSeekClient {
     try {
       // Default to TOOL_SUGGESTION preset if none specified
       const defaultOptions: DeepSeekOptions = {
-        preset: DeepSeekPreset.TOOL_SUGGESTION
+        preset: DeepSeekPreset.TOOL_SUGGESTION,
       };
       
       // Apply preset options
@@ -597,12 +630,11 @@ export class DeepSeekClient {
       // Process messages based on options
       const processedMessages = this.processMessages(params.messages, appliedOptions);
       
-      // For now, since we're simulating the tool suggestion functionality,
-      // we'll analyze the user's message to determine if any tools are relevant
-      const userMessage = processedMessages[processedMessages.length - 1].content.toLowerCase();
+      // Use the DeepSeek LLM to analyze the user's message to determine if any tools are relevant
+      const userMessage = processedMessages[processedMessages.length - 1].content;
       
       // Check if the message contains keywords related to available tools
-      const toolSuggestions = this.analyzeMessageForToolSuggestions(userMessage, params.tools);
+      const toolSuggestions = await this.analyzeMessageForToolSuggestions(userMessage, params.tools);
       
       if (toolSuggestions && toolSuggestions.length > 0) {
         // If we have tool suggestions, return them directly
@@ -631,7 +663,7 @@ export class DeepSeekClient {
         };
       } else {
         // If no tool suggestions, just do a regular chat completion
-        info('No tool suggestions found, proceeding with regular chat completion');
+        info('No relevant tool suggestions found, proceeding with regular chat completion');
         
         const response = await this.client.post('/chat/completions', {
           model: params.model || appliedOptions.model || DEEPSEEK_CONFIG.DEFAULT_MODEL,
@@ -708,71 +740,168 @@ export class DeepSeekClient {
 
   /**
    * Analyze a message to determine if any tools are relevant
-   * This is a simple keyword-based approach that can be replaced with a more sophisticated
-   * approach in the future (e.g., using an actual LLM to determine tool relevance)
+   * Uses the DeepSeek LLM to analyze the message and determine tool relevance
+   * 
+   * @param message The user message to analyze
+   * @param tools The available tools
+   * @returns An array of tool suggestions or undefined if no tools are relevant
    */
-  private analyzeMessageForToolSuggestions(message: string, tools: ToolDefinition[]): ToolSuggestion[] | undefined {
-    const suggestions: ToolSuggestion[] = [];
-    
-    // Check for search-related keywords
-    if (message.includes('search') || message.includes('find') || message.includes('look for')) {
-      const searchTool = tools.find(tool => tool.name === 'search_posts');
-      if (searchTool) {
-        // Extract potential search query
-        let query = '';
-        const searchTerms = ['search for', 'search', 'find', 'look for'];
-        for (const term of searchTerms) {
-          if (message.includes(term)) {
-            const parts = message.split(term);
-            if (parts.length > 1) {
-              query = parts[1].trim().split(' ').slice(0, 5).join(' ');
-              break;
+  private async analyzeMessageForToolSuggestions(message: string, tools: ToolDefinition[]): Promise<ToolSuggestion[] | undefined> {
+    try {
+      // Get the system prompt from the preset configuration
+      const presetConfig = PRESET_CONFIGS[DeepSeekPreset.TOOL_SUGGESTION];
+      let systemPrompt = presetConfig.systemPrompt || '';
+      
+      // Replace the default tools list with the actual tools
+      let toolsDescription = '';
+      for (const tool of tools) {
+        toolsDescription += `- ${tool.name}: ${tool.description}\n`;
+      }
+      
+      // Replace the default tools list in the system prompt
+      systemPrompt = systemPrompt.replace(/Available tools:[\s\S]*?(?=\n\nIMPORTANT GUIDELINES)/, `Available tools:\n${toolsDescription}\n`);
+      
+      // Make a request to the DeepSeek API
+      info(`Analyzing message for tool suggestions: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`);
+      
+      const response = await this.createChatCompletion({
+        // model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
+        ],
+        stream: false
+      }, {
+        preset: DeepSeekPreset.TOOL_SUGGESTION,
+        maxTokens: 200,
+        temperature: 0.2,
+        model: 'deepseek-chat'
+      });
+      
+      if (!response.success || !response.data) {
+        error('Failed to analyze message for tool suggestions', {
+          error: response.error,
+          details: response.details
+        });
+        return undefined;
+      }
+      
+      // Extract the content from the response
+      const content = response.data.choices[0]?.message?.content;
+      if (!content) {
+        error('No content in tool suggestion response', { response: response.data });
+        return undefined;
+      }
+      
+      // Parse the JSON response
+      let toolSuggestionResult: ToolSuggestionResult;
+      try {
+        // Clean the content in case it's wrapped in markdown code blocks
+        let cleanedContent = content;
+        
+        // Check if the content is wrapped in markdown code blocks
+        if (content.startsWith('```') && content.endsWith('```')) {
+          // Extract the JSON from the markdown code block
+          const matches = content.match(/```(?:json)?\n([\s\S]*?)\n```/);
+          if (matches && matches[1]) {
+            cleanedContent = matches[1];
+          }
+        }
+        
+        // Try to parse the content as JSON
+        toolSuggestionResult = JSON.parse(cleanedContent);
+        
+        // Validate that it has the expected structure
+        if (typeof toolSuggestionResult.no_tool_intent !== 'number') {
+          error('Invalid tool suggestion result: missing no_tool_intent', { content: cleanedContent });
+          return undefined;
+        }
+        
+        // Log the result
+        info('Tool suggestion analysis result', {
+          no_tool_intent: toolSuggestionResult.no_tool_intent,
+          tools: Object.entries(toolSuggestionResult)
+            .filter(([key]) => key !== 'no_tool_intent')
+            .map(([key, value]) => `${key}: ${value}`)
+        });
+        
+        // If no_tool_intent is high, return undefined (no tool suggestions)
+        if (toolSuggestionResult.no_tool_intent >= 0.7) {
+          info(`No tool intent detected (score: ${toolSuggestionResult.no_tool_intent})`);
+          return undefined;
+        }
+        
+        // Convert the result to an array of ToolSuggestion objects
+        const suggestions: ToolSuggestion[] = [];
+        
+        for (const [toolName, confidence] of Object.entries(toolSuggestionResult)) {
+          // Skip the no_tool_intent property
+          if (toolName === 'no_tool_intent') continue;
+          
+          // Skip tools with low confidence
+          if (confidence < 0.3) continue;
+          
+          // Find the tool definition
+          const toolDef = tools.find(t => t.name === toolName);
+          if (!toolDef) {
+            warn(`Tool suggestion for unknown tool: ${toolName}`);
+            continue;
+          }
+          
+          // Generate suggested arguments based on the tool and message
+          const suggestedArgs: Record<string, any> = {};
+          
+          // For search_posts, extract a query from the message
+          if (toolName === 'search_posts') {
+            // Extract potential search query
+            let query = '';
+            if (message.includes('search for')) {
+              const parts = message.split('search for');
+              if (parts.length > 1) {
+                query = parts[1].trim().split(' ').slice(0, 5).join(' ');
+              }
+            } else if (message.includes('about')) {
+              const parts = message.split('about');
+              if (parts.length > 1) {
+                query = parts[1].trim().split(' ').slice(0, 5).join(' ');
+              }
             }
+            
+            if (!query) {
+              // Just use some words from the message
+              const words = message.split(' ').filter(word => word.length > 3);
+              query = words.slice(0, 3).join(' ');
+            }
+            
+            suggestedArgs.query = query || 'community';
+            suggestedArgs.hitsPerPage = 5;
+          } else if (toolName === 'create_post') {
+            // For create_post, generate a title and content
+            suggestedArgs.title = 'New post about ' + message.split(' ').slice(0, 3).join(' ');
+            suggestedArgs.content = 'This is a draft post about ' + message;
           }
+          
+          // Add the suggestion
+          suggestions.push({
+            tool: toolName,
+            description: toolDef.description,
+            confidence,
+            suggestedArgs
+          });
         }
         
-        if (!query && message.includes('about')) {
-          const parts = message.split('about');
-          if (parts.length > 1) {
-            query = parts[1].trim().split(' ').slice(0, 5).join(' ');
-          }
-        }
+        // Sort suggestions by confidence (highest first)
+        suggestions.sort((a, b) => b.confidence - a.confidence);
         
-        if (!query) {
-          // Just use some words from the message
-          const words = message.split(' ').filter(word => word.length > 3);
-          query = words.slice(0, 3).join(' ');
-        }
-        
-        suggestions.push({
-          tool: 'search_posts',
-          description: searchTool.description,
-          confidence: 0.95, // Increased from 0.9 to ensure auto-execution
-          suggestedArgs: {
-            query: query || 'community',
-            hitsPerPage: 5
-          }
-        });
+        return suggestions.length > 0 ? suggestions : undefined;
+      } catch (err) {
+        error('Failed to parse tool suggestion result', { error: err, content });
+        return undefined;
       }
+    } catch (err) {
+      error('Error analyzing message for tool suggestions', { error: err });
+      return undefined;
     }
-    
-    // Check for post-related keywords
-    if (message.includes('post') || message.includes('create') || message.includes('write')) {
-      const postTool = tools.find(tool => tool.name === 'create_post');
-      if (postTool) {
-        suggestions.push({
-          tool: 'create_post',
-          description: postTool.description,
-          confidence: 0.7,
-          suggestedArgs: {
-            title: 'New post about ' + message.split(' ').slice(0, 3).join(' '),
-            content: 'This is a draft post about ' + message
-          }
-        });
-      }
-    }
-    
-    return suggestions.length > 0 ? suggestions : undefined;
   }
 
 

@@ -239,6 +239,7 @@ export interface ToolSuggestionsMessage extends BaseMessage {
     suggestedArgs: Record<string, any>;
   }>;
   originalQuery: string;
+  no_tool_intent?: number; // Score between 0 and 1 indicating likelihood user isn't trying to use a tool
 }
 
 /**
