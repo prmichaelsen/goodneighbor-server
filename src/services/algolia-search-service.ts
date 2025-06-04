@@ -103,6 +103,11 @@ export class AlgoliaSearchService {
           relation: 'refs.hasModerator', 
           verb: 'moderated by',
           keywords: ['moderated by', 'curated by', 'managed by', 'administered by', 'moderator']
+        },
+        { 
+          relation: 'refs.hasMention', 
+          verb: 'mentioning',
+          keywords: ['mention', 'mentions', 'mentioning', 'that mention', 'that mentions', 'mentions user']
         }
       ];
       
@@ -118,7 +123,8 @@ export class AlgoliaSearchService {
         `"content owned by @username" → { "query": "", "filters": "refs.hasOwner:@username" }`,
         `"reviews about @username" → { "query": "", "filters": "type:review AND refs.hasSubject:@username" }`,
         `"posts moderated by @admin" → { "query": "", "filters": "type:post AND refs.hasModerator:@admin" }`,
-        `"content in @phoenix.az.us group" → { "query": "", "filters": "refs.isInGroup:@phoenix.az.us" }`
+        `"content in @phoenix.az.us group" → { "query": "", "filters": "refs.isInGroup:@phoenix.az.us" }`,
+        `"find posts that mention Eve" → { "query": "", "filters": "type:post AND refs.hasMention:Eve" }`
       ];
       
       // Create a system prompt that explains how to convert natural language to Algolia parameters
@@ -138,7 +144,10 @@ Follow these guidelines:
 4. Set up highlighting and snippeting if relevant
 5. Configure geo-search parameters if location is mentioned
 6. Add any other relevant Algolia parameters
-7. For queries about authors, creators, owners, etc., use the refs-based filters:
+7. IMPORTANT: For queries about mentions, use refs.hasMention instead of the query field
+   - For example, "find posts that mention Eve" should map to { "query": "", "filters": "type:post AND refs.hasMention:Eve" }
+   - NOT { "query": "eve", "filters": "type:post" }
+8. For queries about authors, creators, owners, etc., use the refs-based filters:
 ${relationshipMappingSection}
 
 Example conversions:
