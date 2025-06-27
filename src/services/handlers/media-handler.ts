@@ -18,10 +18,9 @@ import { ConnectionState } from '../connection/connection-state';
 
 // Initialize Firebase Admin SDK
 if (!getApps().length) {
-  // TODO: Add service account credentials to environment variables
-  // const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY as string);
+  const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SERVICE_ACCOUNT_KEY as string);
   initializeApp({
-    // credential: cert(serviceAccount),
+    credential: cert(serviceAccount),
     storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
   });
 }
