@@ -4,16 +4,20 @@
  */
 
 import WebSocket from 'ws';
-import { 
-  ClientMessage, 
+import {
+  ClientMessage,
   ClientMessageType,
   AuthMessage,
   ToolCallMessage,
   PingMessage,
   ChatCompletionMessage,
   ToolSelectionMessage,
-  NaturalLanguageSearchMessage
+  NaturalLanguageSearchMessage,
+  StartMediaUploadMessage,
+  MediaChunkMessage,
+  EndMediaUploadMessage,
 } from '../../types/messages';
+import { MediaHandler } from '../handlers/media-handler';
 import { ConnectionState } from './connection-state';
 import { debug, error } from '../../utils/logger';
 import { handleMessageProcessingError } from '../../utils/error-handler';
@@ -41,6 +45,7 @@ export class MessageRouter {
   private chatCompletionHandler: MessageHandler<ChatCompletionMessage>;
   private toolSelectionHandler: MessageHandler<ToolSelectionMessage>;
   private naturalLanguageSearchHandler: MessageHandler<NaturalLanguageSearchMessage>;
+  private mediaHandler: MediaHandler;
 
   /**
    * Create a new message router
@@ -58,7 +63,8 @@ export class MessageRouter {
     pingHandler: MessageHandler<PingMessage>,
     chatCompletionHandler: MessageHandler<ChatCompletionMessage>,
     toolSelectionHandler: MessageHandler<ToolSelectionMessage>,
-    naturalLanguageSearchHandler: MessageHandler<NaturalLanguageSearchMessage>
+    naturalLanguageSearchHandler: MessageHandler<NaturalLanguageSearchMessage>,
+    mediaHandler: MediaHandler
   ) {
     this.authHandler = authHandler;
     this.toolCallHandler = toolCallHandler;
@@ -66,6 +72,7 @@ export class MessageRouter {
     this.chatCompletionHandler = chatCompletionHandler;
     this.toolSelectionHandler = toolSelectionHandler;
     this.naturalLanguageSearchHandler = naturalLanguageSearchHandler;
+    this.mediaHandler = mediaHandler;
   }
 
   /**
@@ -113,6 +120,12 @@ export class MessageRouter {
         
         case ClientMessageType.NATURAL_LANGUAGE_SEARCH:
           await this.naturalLanguageSearchHandler.handle(connection, message as NaturalLanguageSearchMessage);
+          break;
+
+        case ClientMessageType.START_MEDIA_UPLOAD:
+        case ClientMessageType.MEDIA_CHUNK:
+        case ClientMessageType.END_MEDIA_UPLOAD:
+          await this.mediaHandler.handle(connection, message);
           break;
         
         default:

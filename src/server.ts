@@ -9,13 +9,14 @@ import WebSocket from 'ws';
 import cors from 'cors';
 import { SERVER_CONFIG, WS_CONFIG, validateConfig, DEEPSEEK_CONFIG } from './config';
 import { ConnectionManager } from './services/connection';
-import { 
-  AuthMessageHandler, 
-  PingMessageHandler, 
-  ToolCallMessageHandler, 
-  ToolSelectionMessageHandler, 
-  NaturalLanguageSearchMessageHandler, 
-  ChatCompletionMessageHandler 
+import {
+  AuthMessageHandler,
+  PingMessageHandler,
+  ToolCallMessageHandler,
+  ToolSelectionMessageHandler,
+  NaturalLanguageSearchMessageHandler,
+  ChatCompletionMessageHandler,
+  MediaHandler,
 } from './services/handlers';
 import { MessageRouter } from './services/connection';
 import { mcpClient } from './services/mcp-client';
@@ -54,6 +55,7 @@ export class Server {
     const toolSelectionHandler = new ToolSelectionMessageHandler();
     const naturalLanguageSearchHandler = new NaturalLanguageSearchMessageHandler();
     const chatCompletionHandler = new ChatCompletionMessageHandler();
+    const mediaHandler = new MediaHandler();
     
     // Create message router
     const messageRouter = new MessageRouter(
@@ -62,7 +64,8 @@ export class Server {
       pingHandler,
       chatCompletionHandler,
       toolSelectionHandler,
-      naturalLanguageSearchHandler
+      naturalLanguageSearchHandler,
+      mediaHandler
     );
     
     // Create connection manager

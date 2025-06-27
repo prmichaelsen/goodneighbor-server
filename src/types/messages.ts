@@ -12,6 +12,9 @@ export enum ClientMessageType {
   CHAT_COMPLETION = 'chat_completion',
   TOOL_SELECTION = 'tool_selection', // User selects a suggested tool
   NATURAL_LANGUAGE_SEARCH = 'natural_language_search', // New: Natural language search
+  START_MEDIA_UPLOAD = 'start_media_upload',
+  MEDIA_CHUNK = 'media_chunk',
+  END_MEDIA_UPLOAD = 'end_media_upload',
 }
 
 /**
@@ -27,6 +30,8 @@ export enum ServerMessageType {
   CHAT_COMPLETION_RESULT = 'chat_completion_result',
   TOOL_SUGGESTIONS = 'tool_suggestions', // Server suggests tools
   NATURAL_LANGUAGE_SEARCH_RESULT = 'natural_language_search_result', // New: Natural language search result
+  MEDIA_UPLOAD_READY = 'media_upload_ready',
+  MEDIA_UPLOAD_COMPLETE = 'media_upload_complete',
 }
 
 /**
@@ -132,9 +137,42 @@ export interface NaturalLanguageSearchMessage extends BaseMessage {
 }
 
 /**
+ * Start media upload message from client
+ */
+export interface StartMediaUploadMessage extends BaseMessage {
+  type: ClientMessageType.START_MEDIA_UPLOAD;
+  fileName: string;
+  mimeType: string;
+}
+
+/**
+ * Media chunk message from client
+ */
+export interface MediaChunkMessage extends BaseMessage {
+  type: ClientMessageType.MEDIA_CHUNK;
+  chunk: string; // Base64 encoded chunk
+}
+
+/**
+ * End media upload message from client
+ */
+export interface EndMediaUploadMessage extends BaseMessage {
+  type: ClientMessageType.END_MEDIA_UPLOAD;
+}
+
+/**
  * Union type for all client messages
  */
-export type ClientMessage = AuthMessage | ToolCallMessage | PingMessage | ChatCompletionMessage | ToolSelectionMessage | NaturalLanguageSearchMessage;
+export type ClientMessage =
+  | AuthMessage
+  | ToolCallMessage
+  | PingMessage
+  | ChatCompletionMessage
+  | ToolSelectionMessage
+  | NaturalLanguageSearchMessage
+  | StartMediaUploadMessage
+  | MediaChunkMessage
+  | EndMediaUploadMessage;
 
 /**
  * Authentication result message from server
@@ -254,6 +292,32 @@ export interface NaturalLanguageSearchResultMessage extends BaseMessage {
 }
 
 /**
+ * Media upload ready message from server
+ */
+export interface MediaUploadReadyMessage extends BaseMessage {
+  type: ServerMessageType.MEDIA_UPLOAD_READY;
+}
+
+/**
+ * Media upload complete message from server
+ */
+export interface MediaUploadCompleteMessage extends BaseMessage {
+  type: ServerMessageType.MEDIA_UPLOAD_COMPLETE;
+  fileUrl: string;
+}
+
+/**
  * Union type for all server messages
  */
-export type ServerMessage = AuthResultMessage | ToolResultMessage | ErrorMessage | StatusMessage | PongMessage | ChatCompletionChunkMessage | ChatCompletionResultMessage | ToolSuggestionsMessage | NaturalLanguageSearchResultMessage;
+export type ServerMessage =
+  | AuthResultMessage
+  | ToolResultMessage
+  | ErrorMessage
+  | StatusMessage
+  | PongMessage
+  | ChatCompletionChunkMessage
+  | ChatCompletionResultMessage
+  | ToolSuggestionsMessage
+  | NaturalLanguageSearchResultMessage
+  | MediaUploadReadyMessage
+  | MediaUploadCompleteMessage;
